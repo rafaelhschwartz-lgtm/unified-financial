@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 12px; font-family: 'Arial', sans-serif; background-color: #f8f9fa; }
+      .editor-header { font-weight: bold; color: #1f4e78; margin-bottom: 12px; font-size: 1.1rem; display: flex; align-items: center; justify-content: space-between; }
+      .editor-card { background: white; padding: 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
+      .input-field { margin-top: 5px; margin-bottom: 5px; }
+      .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+      .search-box { margin-bottom: 10px; }
+      .tx-item { background: white; padding: 10px; border-radius: 4px; margin-bottom: 8px; border-left: 4px solid #1f4e78; cursor: pointer; transition: all 0.2s; }
+      .tx-item:hover { background: #e8eff7; }
+      .tx-item.outflow { border-left-color: #db4437; }
+      .tx-item.inflow { border-left-color: #385723; }
+      .tx-item.transfer { border-left-color: #1f4e78; }
+      .tx-merchant { font-weight: bold; font-size: 0.9rem; color: #333; }
+      .tx-details { font-size: 0.75rem; color: #666; display: flex; justify-content: space-between; margin-top: 4px; }
+      .pagination-controls { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <div class="editor-header">
+      <span><i class="material-icons left">edit_note</i>Ledger Editor</span>
+      <button class="btn-small blue darken-3" onclick="resetForm()"><i class="material-icons left">add</i>New</button>
+    </div>
+
+    <div class="editor-card">
+      <input type="hidden" id="txRowIdx" value="">
+      <div class="row" style="margin-bottom:0;">
+        <div class="input-field col s6">
+          <input type="date" id="txDate">
+        </div>
+        <div class="input-field col s6">
+          <input type="number" step="0.01" id="txAmount" placeholder="Amount ($)">
+        </div>
+      </div>
+      <div class="input-field" style="margin-top:0;">
+        <input type="text" id="txMerchant" placeholder="Merchant / Payee Name">
+      </div>
+      <div class="row" style="margin-bottom:0;">
+        <div class="input-field col s6">
+          <select id="txFlow" class="browser-default">
+            <option value="OUTFLOW">OUTFLOW</option>
+            <option value="INFLOW">INFLOW</option>
+            <option value="TRANSFER">TRANSFER</option>
+          </select>
+        </div>
+        <div class="input-field col s6">
+          <select id="txCategory" class="browser-default">
+            <option value="">Category...</option>
+          </select>
+        </div>
+      </div>
+      <div class="input-field">
+        <select id="txAccount" class="browser-default">
+          <option value="">Account Source...</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-small blue darken-3 waves-effect" onclick="saveTx()" style="flex:1;">Save</button>
+        <button class="btn btn-small red darken-2 waves-effect" id="btnDelete" onclick="deleteTx()" style="display:none;"><i class="material-icons">delete</i></button>
+        <button class="btn btn-small grey waves-effect" onclick="resetForm()">Clear</button>
+      </div>
+    </div>
+
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="Search merchant, category, account..." onkeyup="debounceSearch()">
+    </div>
+
+    <div id="txList">Loading transactions...</div>
+
+    <div class="pagination-controls">
+      <button class="btn-small grey lighten-2 black-text" id="btnPrev" onclick="changePage(-1)">Prev</button>
+      <span id="pageInfo">Page 1</span>
+      <button class="btn-small grey lighten-2 black-text" id="btnNext" onclick="changePage(1)">Next</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    <script>
+      let currentPage = 1;
+      let totalPages = 1;
+      let searchTimeout = null;
+
+      document.addEventListener('DOMContentLoaded', function() {
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('txDate').value = today;
+        loadEnums();
+        loadPage(1);
+      });
+
+      function loadEnums() {
+        google.script.run.withSuccessHandler(function(enums) {
+          const catSelect = document.getElementById('txCategory');
+          catSelect.innerHTML = '<option value="">Category...</option>';
+          enums.categories.forEach(c => {
+            catSelect.innerHTML += `<option value="${c}">${c}</option>`;
+          });
+
+          const acctSelect = document.getElementById('txAccount');
+          acctSelect.innerHTML = '<option value="">Account Source...</option>';
+          enums.accounts.forEach(a => {
+            acctSelect.innerHTML += `<option value="${a}">${a}</option>`;
+          });
+        }).getEnumValues();
+      }
+
+      function loadPage(page) {
+        currentPage = page;
+        const query = document.getElementById('searchInput').value;
+        google.script.run.withSuccessHandler(renderPage).getTransactionsPage(currentPage, 10, query);
+      }
+
+      function renderPage(res) {
+        totalPages = res.totalPages;
+        document.getElementById('pageInfo').innerText = `Page ${res.currentPage} of ${totalPages} (${res.totalRecords})`;
+        document.getElementById('btnPrev').disabled = (res.currentPage <= 1);
+        document.getElementById('btnNext').disabled = (res.currentPage >= totalPages);
+
+        const container = document.getElementById('txList');
+        if (!res.data || res.data.length === 0) {
+          container.innerHTML = '<div style="text-align:center; color:#999; padding:15px;">No transactions found.</div>';
+          return;
+        }
+
+        let html = '';
+        res.data.forEach(item => {
+          const flowClass = item.flow.toLowerCase();
+          const cleanName = item.merchantClean || item.merchantRaw || "Transaction";
+          html += `
+            <div class="tx-item ${flowClass}" onclick='selectTx(${JSON.stringify(item)})'>
+              <div class="tx-merchant">${cleanName}</div>
+              <div class="tx-details">
+                <span>${item.date} • ${item.category}</span>
+                <strong style="color:${flowClass === 'inflow' ? '#385723' : (flowClass === 'transfer' ? '#1f4e78' : '#db4437')}">
+                  ${flowClass === 'inflow' ? '+' : '-'}$${item.amount.toFixed(2)}
+                </strong>
+              </div>
+            </div>`;
+        });
+        container.innerHTML = html;
+      }
+
+      function selectTx(item) {
+        document.getElementById('txRowIdx').value = item.rowIdx;
+        document.getElementById('txDate').value = item.date;
+        document.getElementById('txMerchant').value = item.merchantClean || item.merchantRaw;
+        document.getElementById('txAmount').value = item.amount;
+        document.getElementById('txFlow').value = item.flow;
+        document.getElementById('txCategory').value = item.category;
+        document.getElementById('txAccount').value = item.accountSource;
+        document.getElementById('btnDelete').style.display = 'inline-block';
+      }
+
+      function resetForm() {
+        document.getElementById('txRowIdx').value = '';
+        document.getElementById('txDate').value = new Date().toISOString().split('T')[0];
+        document.getElementById('txMerchant').value = '';
+        document.getElementById('txAmount').value = '';
+        document.getElementById('txFlow').value = 'OUTFLOW';
+        document.getElementById('txCategory').value = '';
+        document.getElementById('txAccount').value = '';
+        document.getElementById('btnDelete').style.display = 'none';
+      }
+
+      function saveTx() {
+        const txData = {
+          rowIdx: document.getElementById('txRowIdx').value,
+          date: document.getElementById('txDate').value,
+          merchant: document.getElementById('txMerchant').value,
+          amount: parseFloat(document.getElementById('txAmount').value) || 0,
+          flow: document.getElementById('txFlow').value,
+          category: document.getElementById('txCategory').value,
+          accountSource: document.getElementById('txAccount').value
+        };
+
+        if (!txData.merchant || txData.amount <= 0) {
+          M.toast({html: 'Please enter merchant and valid amount', classes: 'orange'});
+          return;
+        }
+
+        M.toast({html: 'Saving transaction... ⏳', classes: 'blue'});
+        google.script.run.withSuccessHandler(function(res) {
+          M.toast({html: 'Transaction saved! 🎉', classes: 'green'});
+          resetForm();
+          loadPage(currentPage);
+        }).addOrUpdateTransaction(txData);
+      }
+
+      function deleteTx() {
+        const rowIdx = document.getElementById('txRowIdx').value;
+        if (!rowIdx) return;
+
+        if (confirm("Delete this transaction permanently?")) {
+          M.toast({html: 'Deleting... ⏳', classes: 'blue'});
+          google.script.run.withSuccessHandler(function(res) {
+            M.toast({html: 'Transaction deleted! 🗑️', classes: 'green'});
+            resetForm();
+            loadPage(currentPage);
+          }).deleteTransactionRow(rowIdx);
+        }
+      }
+
+      function debounceSearch() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(function() {
+          loadPage(1);
+        }, 300);
+      }
+
+      function changePage(delta) {
+        const newPage = currentPage + delta;
+        if (newPage >= 1 && newPage <= totalPages) {
+          loadPage(newPage);
+        }
+      }
+    </script>
+  </body>
+</html>

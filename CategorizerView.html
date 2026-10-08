@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 12px; font-family: 'Arial', sans-serif; background-color: #f8f9fa; }
+      .card-header { font-weight: bold; color: #1f4e78; margin-bottom: 12px; font-size: 1.1rem; display: flex; align-items: center; justify-content: space-between; }
+      .queue-card { background: white; padding: 15px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); margin-bottom: 15px; border-top: 4px solid #1f4e78; }
+      .merchant-title { font-weight: bold; font-size: 1.1rem; color: #333; margin-bottom: 4px; }
+      .raw-snippet { font-size: 0.75rem; color: #888; margin-bottom: 10px; font-style: italic; word-break: break-all; }
+      .amount-badge { font-size: 1.2rem; font-weight: bold; color: #db4437; margin-bottom: 12px; }
+      .btn-categorize { width: 100%; background-color: #1f4e78 !important; margin-top: 10px; height: 40px; font-weight: bold; }
+      .queue-counter { background: #e8eff7; color: #1f4e78; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <div class="card-header">
+      <span><i class="material-icons left">psychology</i>Categorization Assistant</span>
+      <span id="queueCounter" class="queue-counter">0 Left</span>
+    </div>
+
+    <div id="loader" style="text-align:center; padding:20px;">
+      <div class="preloader-wrapper small active">
+        <div class="spinner-layer spinner-blue-only">
+          <div class="circle-clipper left"><div class="circle"></div></div>
+          <div class="gap-patch"><div class="circle"></div></div>
+          <div class="circle-clipper right"><div class="circle"></div></div>
+        </div>
+      </div>
+      <p style="color:#666; font-size:0.85rem; margin-top:10px;">Scanning transactions...</p>
+    </div>
+
+    <div id="emptyState" style="display:none; text-align:center; padding:30px 10px; background:white; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+      <i class="material-icons green-text" style="font-size:3rem;">check_circle</i>
+      <h6 style="font-weight:bold; color:#333; margin-top:10px;">All Transactions Categorized! 🎉</h6>
+      <p style="color:#666; font-size:0.85rem;">Your ledger is clean and fully classified.</p>
+    </div>
+
+    <div id="queueContainer" style="display:none;">
+      <div class="queue-card">
+        <div id="cardDate" style="font-size:0.8rem; color:#666; font-weight:bold;">2026-09-09</div>
+        <div id="cardMerchant" class="merchant-title">Starbucks</div>
+        <div id="cardRaw" class="raw-snippet">Raw: SQ *STARBUCKS STORE 1234</div>
+        <div id="cardAmount" class="amount-badge">$5.75</div>
+
+        <div class="input-field" style="margin-top:0;">
+          <select id="catSelect" class="browser-default">
+            <option value="">Select Category...</option>
+          </select>
+        </div>
+
+        <p style="margin-top:10px; margin-bottom:10px;">
+          <label>
+            <input type="checkbox" id="checkSaveRule" class="filled-in" checked="checked" />
+            <span style="font-size:0.85rem; color:#333;">Save rule for keyword: <strong id="ruleKeyword">starbucks</strong></span>
+          </label>
+        </p>
+
+        <button class="btn waves-effect waves-light btn-categorize" onclick="submitCategory()">
+          Categorize & Apply Rule
+          <i class="material-icons right">check</i>
+        </button>
+      </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    <script>
+      let queueData = [];
+      let categoriesList = [];
+      let currentIndex = 0;
+
+      document.addEventListener('DOMContentLoaded', function() {
+        loadQueue();
+      });
+
+      function loadQueue() {
+        google.script.run.withSuccessHandler(function(res) {
+          queueData = res.queue || [];
+          categoriesList = res.categories || [];
+          
+          const select = document.getElementById('catSelect');
+          select.innerHTML = '<option value="">Select Category...</option>';
+          categoriesList.forEach(c => {
+            select.innerHTML += `<option value="${c}">${c}</option>`;
+          });
+
+          document.getElementById('loader').style.display = 'none';
+          if (queueData.length === 0) {
+            document.getElementById('emptyState').style.display = 'block';
+            document.getElementById('queueContainer').style.display = 'none';
+            document.getElementById('queueCounter').innerText = "0 Left";
+          } else {
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('queueContainer').style.display = 'block';
+            currentIndex = 0;
+            renderCard();
+          }
+        }).getUncategorizedQueue();
+      }
+
+      function renderCard() {
+        if (currentIndex >= queueData.length) {
+          loadQueue();
+          return;
+        }
+
+        const item = queueData[currentIndex];
+        document.getElementById('queueCounter').innerText = `${queueData.length - currentIndex} Left`;
+        document.getElementById('cardDate').innerText = item.date;
+        document.getElementById('cardMerchant').innerText = item.cleanMerchant;
+        document.getElementById('cardRaw').innerText = "Raw: " + item.rawMerchant;
+        document.getElementById('cardAmount').innerText = "$" + item.amount.toFixed(2);
+        
+        const select = document.getElementById('catSelect');
+        select.value = item.suggestedCategory || "";
+
+        const keyword = item.cleanMerchant.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        document.getElementById('ruleKeyword').innerText = keyword || item.cleanMerchant.toLowerCase();
+      }
+
+      function submitCategory() {
+        if (currentIndex >= queueData.length) return;
+
+        const item = queueData[currentIndex];
+        const category = document.getElementById('catSelect').value;
+        const saveRule = document.getElementById('checkSaveRule').checked;
+        const keyword = document.getElementById('ruleKeyword').innerText;
+
+        if (!category) {
+          M.toast({html: 'Please select a category', classes: 'orange'});
+          return;
+        }
+
+        M.toast({html: 'Categorizing & learning rule... ⏳', classes: 'blue'});
+        google.script.run.withSuccessHandler(function(res) {
+          M.toast({html: 'Categorized successfully! 🎉', classes: 'green'});
+          currentIndex++;
+          renderCard();
+        }).applyCategoryWithRule(item.rowIdx, category, keyword, saveRule);
+      }
+    </script>
+  </body>
+</html>
