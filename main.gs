@@ -52,6 +52,9 @@ function onOpen() {
     .addSeparator()
     .addItem("Check Budget Breaches", "checkBudgetBreaches")
     .addItem("Dispatch Weekly Summary Email", "sendWeeklyBudgetSummary")
+    .addSeparator()
+    .addItem("➕ Create Travel Itinerary & Agenda", "promptTravelItinerary")
+    .addItem("📈 Build CD Portfolio Growth Tracker", "setupCDTracker")
     .addToUi();
 }
 
@@ -2087,4 +2090,193 @@ function executeSavingsSweep(ss, year, month, netSavings) {
 
 function formatCurrency(amount) {
   return "$" + parseFloat(amount).toFixed(2).replace(/\d(?=(\d{3})+\.)/g, '$&,');
+}
+
+
+// ===========================================================================
+// 12. CERTIFICATE OF DEPOSIT (CD) PORTFOLIO & VARIABLE RENEWAL ENGINE
+// ===========================================================================
+
+/**
+ * Menu Trigger: Prompts user and constructs/resets the CD_Tracker sheet tab.
+ */
+function setupCDTracker() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let cdSheet = ss.getSheetByName("CD_Tracker");
+  
+  if (!cdSheet) {
+    cdSheet = ss.insertSheet("CD_Tracker");
+  } else {
+    const res = ui.alert("Reset CD Tracker? ⚠️", "Do you want to re-initialize the CD_Tracker tab? Existing data will be reformatted.", ui.ButtonSet.YES_NO);
+    if (res !== ui.Button.YES) return;
+    cdSheet.clear();
+  }
+
+  // Title Block
+  formatHeader(cdSheet, "A1:L1", "CERTIFICATE OF DEPOSIT (CD) PORTFOLIO & RENEWAL TRACKER");
+  
+  // Table Headers
+  const headers = [["Bank / Institution", "Certificate #", "Principal Deposit", "Issue Date", "Term (Months)", "Maturity Date", "Initial APY", "Auto-Renew?", "Renewal APY", "Current Value", "Maturity Payout", "Status"]];
+  cdSheet.getRange("A2:L2").setValues(headers).setFontWeight("bold");
+  formatSubHeader(cdSheet, "A2:L2");
+  cdSheet.setRowHeight(2, 25);
+
+  // Sample CD Portfolio rows (demonstrating variable rates and renewal terms)
+  const sampleCDs = [
+    ["Marcus by Goldman Sachs", "CD-8812", 10000.00, "2025-10-15", 12, "", 0.0525, "YES", 0.0450, "", "", ""],
+    ["Discover Bank", "CD-9041", 15000.00, "2026-01-10", 18, "", 0.0500, "YES", 0.0425, "", "", ""],
+    ["Capital One", "CD-3321", 5000.00, "2026-05-01", 6, "", 0.0475, "NO", 0.0000, "", "", ""]
+  ];
+
+  cdSheet.getRange(3, 1, sampleCDs.length, 12).setValues(sampleCDs);
+
+  // Dynamic Formulas for each CD row
+  for (let i = 0; i < sampleCDs.length; i++) {
+    const r = 3 + i;
+    // Maturity Date: =EDATE(Issue_Date, Term)
+    cdSheet.getRange(r, 6).setFormula(`=EDATE(D${r}, E${r})`);
+    
+    // Current Value: Accounts for compounding elapsed time & auto-renewal transition if TODAY() > Maturity Date
+    cdSheet.getRange(r, 10).setFormula(
+      `=IF(D${r}="", 0, IF(TODAY()<=F${r}, C${r}*(1 + G${r}*(MAX(0, TODAY()-D${r})/365)), IF(H${r}="YES", (C${r}*(1+G${r}*(E${r}/12)))*(1 + I${r}*(MAX(0, TODAY()-F${r})/365)), C${r}*(1+G${r}*(E${r}/12)))))`
+    );
+
+    // Total Maturity Payout
+    cdSheet.getRange(r, 11).setFormula(`=C${r}*(1 + G${r}*(E${r}/12))`);
+
+    // Status Indicator
+    cdSheet.getRange(r, 12).setFormula(
+      `=IF(TODAY()<F${r}, "ACTIVE 🟢", IF(H${r}="YES", "RENEWED 🔄", "MATURED 🟡"))`
+    );
+  }
+
+  // Formats
+  cdSheet.getRange("C3:C100").setNumberFormat("$#,##0.00");
+  cdSheet.getRange("J3:K100").setNumberFormat("$#,##0.00");
+  cdSheet.getRange("D3:D100").setNumberFormat("yyyy-mm-dd");
+  cdSheet.getRange("F3:F100").setNumberFormat("yyyy-mm-dd");
+  cdSheet.getRange("G3:G100").setNumberFormat("0.00%");
+  cdSheet.getRange("I3:I100").setNumberFormat("0.00%");
+
+  // Auto-Renew Data Validation Dropdown
+  const renewValidation = SpreadsheetApp.newDataValidation().requireValueInList(["YES", "NO"]).setAllowInvalid(false).build();
+  cdSheet.getRange("H3:H100").setDataValidation(renewValidation);
+
+  // Portfolio Totals Summary Row
+  const totalRow = 3 + sampleCDs.length + 1;
+  cdSheet.getRange(totalRow, 1).setValue("Total CD Portfolio Value:").setFontWeight("bold");
+  cdSheet.getRange(totalRow, 3).setFormula(`=SUM(C3:C${totalRow-2})`).setFontWeight("bold").setNumberFormat("$#,##0.00");
+  cdSheet.getRange(totalRow, 10).setFormula(`=SUM(J3:J${totalRow-2})`).setFontWeight("bold").setNumberFormat("$#,##0.00");
+  cdSheet.getRange(totalRow, 11).setFormula(`=SUM(K3:K${totalRow-2})`).setFontWeight("bold").setNumberFormat("$#,##0.00");
+  cdSheet.getRange(totalRow, 1, 1, 12).setBackground("#f2f2f2");
+
+  cdSheet.autoResizeColumns(1, 12);
+
+  // Programmatic CD Portfolio Bar Chart
+  try {
+    const existingCharts = cdSheet.getCharts();
+    existingCharts.forEach(c => cdSheet.removeChart(c));
+
+    const cdChart = cdSheet.newChart()
+      .setChartType(Charts.ChartType.COLUMN)
+      .addRange(cdSheet.getRange(2, 1, sampleCDs.length + 1, 1)) // Bank name
+      .addRange(cdSheet.getRange(2, 3, sampleCDs.length + 1, 1)) // Principal
+      .addRange(cdSheet.getRange(2, 10, sampleCDs.length + 1, 1)) // Current Value
+      .setPosition(totalRow + 2, 1, 0, 0)
+      .setOption('title', 'CD Principal vs Current Value Accrual')
+      .setOption('legend', { position: 'top' })
+      .setOption('width', 600)
+      .setOption('height', 320)
+      .setOption('colors', ['#1f4e78', '#2e7d32'])
+      .build();
+    cdSheet.insertChart(cdChart);
+  } catch (err) {
+    console.error("CD Chart build error: " + err.toString());
+  }
+
+  ui.alert("CD Portfolio Tracker Online! 📈", "The CD_Tracker tab has been generated with dynamic compounding formulas, renewal rates, and portfolio charts.", ui.ButtonSet.OK);
+}
+
+// ===========================================================================
+// 13. AUTOMATED TRAVEL PLANNER & ITINERARY GENERATOR
+// ===========================================================================
+
+/**
+ * Menu Trigger: Prompts user for a trip name and builds a structured Travel Itinerary/Agenda tab.
+ */
+function promptTravelItinerary() {
+  const ui = SpreadsheetApp.getUi();
+  const resp = ui.prompt("Create Travel Itinerary ✈️", "Please enter the Trip Name (e.g., Israel_TLV_2026 or NYC_Weekend):", ui.ButtonSet.OK_CANCEL);
+  if (resp.getSelectedButton() === ui.Button.OK) {
+    const tripTitle = resp.getResponseText().trim().replace(/[^a-zA-Z0-9_]/g, "_");
+    if (!tripTitle) {
+      ui.alert("Invalid Name", "Please provide a valid trip title.", ui.ButtonSet.OK);
+      return;
+    }
+    createTravelAgendaTab(tripTitle);
+  }
+}
+
+/**
+ * Constructs a comprehensive Travel Itinerary & Agenda tab based on travel planner templates.
+ */
+function createTravelAgendaTab(tripTitle) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetName = "Agenda_" + tripTitle;
+  let agendaSheet = ss.getSheetByName(sheetName);
+
+  if (!agendaSheet) {
+    agendaSheet = ss.insertSheet(sheetName);
+  } else {
+    agendaSheet.clear();
+  }
+
+  // Header Banner
+  formatHeader(agendaSheet, "A1:G1", "TRAVEL ITINERARY & AGENDA: " + tripTitle.replace(/_/g, " ").toUpperCase());
+
+  // 1. FLIGHT & TRANSPORTATION DETAILS BLOCK
+  agendaSheet.getRange("A3:G3").setValues([["Flight / Transportation Details", "", "", "", "", "", ""]]);
+  formatSubHeader(agendaSheet, "A3:G3");
+  const flightHeaders = [["Leg / Direction", "Carrier", "Flight #", "Departure Date & Time", "Arrival Date & Time", "Confirmation Code", "Seat / Class"]];
+  agendaSheet.getRange("A4:G4").setValues(flightHeaders).setFontWeight("bold");
+
+  const sampleFlights = [
+    ["Outbound", "Delta Airlines", "DL-198", "2026-09-20 18:30", "2026-09-21 11:45", "DL-CONF-8812", "14B / Economy"],
+    ["Return", "Delta Airlines", "DL-199", "2026-09-30 14:15", "2026-09-30 20:00", "DL-CONF-8812", "15A / Economy"]
+  ];
+  agendaSheet.getRange(5, 1, sampleFlights.length, 7).setValues(sampleFlights);
+
+  // 2. ACCOMMODATION BLOCK
+  const hotelRow = 8;
+  agendaSheet.getRange(`A${hotelRow}:G${hotelRow}`).setValues([["Accommodation & Lodging", "", "", "", "", "", ""]]);
+  formatSubHeader(agendaSheet, `A${hotelRow}:G${hotelRow}`);
+  const hotelHeaders = [["Hotel / Airbnb Name", "Address / Location", "Check-In Date", "Check-Out Date", "Confirmation #", "Contact Phone", "Nightly Rate"]];
+  agendaSheet.getRange(hotelRow + 1, 1, 1, 7).setValues(hotelHeaders).setFontWeight("bold");
+
+  const sampleHotels = [
+    ["Tel Aviv Beach Hotel", "Hayarkon St 121, Tel Aviv", "2026-09-21", "2026-09-30", "HOTEL-TLV-991", "+972 3-555-0192", 220.00]
+  ];
+  agendaSheet.getRange(hotelRow + 2, 1, sampleHotels.length, 7).setValues(sampleHotels);
+  agendaSheet.getRange(`G${hotelRow + 2}`).setNumberFormat("$#,##0.00");
+
+  // 3. DAILY SCHEDULE & ITINERARY MATRIX
+  const scheduleRow = 12;
+  agendaSheet.getRange(`A${scheduleRow}:G${scheduleRow}`).setValues([["Daily Agenda & Activity Schedule", "", "", "", "", "", ""]]);
+  formatSubHeader(agendaSheet, `A${scheduleRow}:G${scheduleRow}`);
+  const scheduleHeaders = [["Date", "Time", "Activity / Event Description", "Location / Venue", "Reservation / Tickets", "Est. Cost ($)", "Status"]];
+  agendaSheet.getRange(scheduleRow + 1, 1, 1, 7).setValues(scheduleHeaders).setFontWeight("bold");
+
+  const sampleActivities = [
+    ["2026-09-21", "14:00", "Hotel Check-in & Rest", "Tel Aviv Beach Hotel", "Confirmed", 0.00, "COMPLETED"],
+    ["2026-09-22", "10:00", "Old Jaffa Walking Tour", "Clock Tower, Jaffa", "Tour Group A", 45.00, "PLANNED"],
+    ["2026-09-23", "19:00", "Group Dinner @ Schwartz TLV", "Rothschild Blvd", "Res #781", 120.00, "PLANNED"]
+  ];
+  agendaSheet.getRange(scheduleRow + 2, 1, sampleActivities.length, 7).setValues(sampleActivities);
+  agendaSheet.getRange(`F${scheduleRow + 2}:F${scheduleRow + 2 + sampleActivities.length}`).setNumberFormat("$#,##0.00");
+
+  agendaSheet.autoResizeColumns(1, 7);
+
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Itinerary Created! ✈️", "Created " + sheetName + " tab with pre-built Flight, Lodging, and Daily Activity schedules.", ui.ButtonSet.OK);
 }

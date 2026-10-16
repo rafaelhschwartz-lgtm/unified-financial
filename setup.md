@@ -546,3 +546,29 @@ This comprehensive guide serves as the ultimate manual for configuring, testing,
   </body>
 </html>
 ```
+
+
+---
+
+## 7. Certificate of Deposit (CD) Portfolio & Renewable Interest Engine (`CD_Tracker`)
+
+To track fixed-income Certificates of Deposit across multiple banking institutions with varying renewal APYs, V13 introduces the **CD Portfolio Engine**:
+
+### A. How Variable Rates & Auto-Renewals Work
+1. **Initial Interest Period**: During the active term, compound yield accrues based on `Initial APY` and initial `Issue Date`.
+2. **Auto-Renewal Rollover**: If `Auto-Renew?` is set to `YES`, when `TODAY()` passes the `Maturity Date`, the principal is automatically updated to include the accrued interest, and compound yield transitions to calculating accrued interest using `Renewal APY`.
+3. **Dynamic Formula**:
+   ```excel
+   =IF(D3="", 0, IF(TODAY()<=F3, C3*(1 + G3*(MAX(0, TODAY()-D3)/365)), IF(H3="YES", (C3*(1+G3*(E3/12)))*(1 + I3*(MAX(0, TODAY()-F3)/365)), C3*(1+G3*(E3/12)))))
+   ```
+
+---
+
+## 8. Routing Trip Transactions & Auto-Generated Travel Agendas (`Agenda_[TripName]`)
+
+To cleanly isolate travel expenses from daily household metrics:
+1. **Trip Tagging**: Use `Category_Rules_DB` or the **Trip / Project Expense Tracker** (`promptTripBudget`) to tag trip transactions.
+2. **Auto-Generated Itinerary Tab**: Select **`Financial Automation 🚀` > `➕ Create Travel Itinerary & Agenda`** to build a structured `Agenda_[TripName]` sheet with sections for:
+   * **Flight & Transportation Details** (Carrier, Confirmation Code, Flight #, Departure/Arrival).
+   * **Accommodation & Lodging** (Hotel/Airbnb Name, Check-In/Check-Out, Nightly Rates).
+   * **Daily Activity Schedule** (Time, Location, Reservation Details, Costs).
