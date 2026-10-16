@@ -93,12 +93,6 @@ function createNewSpreadsheet() {
   Logger.log("Your new spreadsheet is ready at: " + url);
   
   try {
-    const ui = SpreadsheetApp.getUi();
-    const alertTitle = "Workbook Successfully Created! 🚀";
-    const alertMessage = "Your automated spreadsheet is ready.\n\n" +
-                         "Copy the URL below to open your new file:\n\n" + url + "\n\n" +
-                         "💡 Tip: Run 'Initialize Sheets in This Workbook' inside your current file to keep all bound scripts connected!";
-    ui.alert(alertTitle, alertMessage, ui.ButtonSet.OK);
     showUrlModal(url);
   } catch (e) {
     Logger.log("Notice: Pop-up modal could not be displayed because the script is running without an active browser UI context.");
@@ -524,7 +518,7 @@ function createWholeBook(ss) {
     
     // Chart 2: Category Expense Allocation (Donut Chart)
     const expenseBreakdownChart = dash.newChart()
-      .setChartType(Charts.ChartType.DONUT)
+      .setChartType(Charts.ChartType.PIE)
       .addRange(dash.getRange(9, 1, enumCategoriesCount + 1, 1))
       .addRange(dash.getRange(9, 3, enumCategoriesCount + 1, 1))
       .setPosition(9, 16, 0, 0)

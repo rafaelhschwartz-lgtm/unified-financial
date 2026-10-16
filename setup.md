@@ -1,6 +1,8 @@
-# Unified Financial Automation Setup Guide - V5 (Master Edition)
+# Unified Financial Automation Setup Guide - V6 (Standardized Edition)
 
 This comprehensive guide serves as the ultimate manual for configuring, testing, and expanding your **Enterprise-Grade, Relational Personal Finance Ledger System**. This workbook is engineered to comply with the **FAST Modeling Standard** (Flexibility, Appropriateness, Structure, Transparency) and the **ICAEW Spreadsheet Design Principles**.
+
+---
 
 ---
 
@@ -12,7 +14,7 @@ This comprehensive guide serves as the ultimate manual for configuring, testing,
 * Clicking "Generate Automated Sheet" ran both files' setup logic, creating **two completely separate Google Sheets files back-to-back with two different URL popups**.
 
 **The Fix:** 
-1. Delete all legacy script files in your Apps Script editor. You must have only **one** backend file (name it `main.gs`) and copy the code of **`unified-financial-automation-v5.gs`** into it.
+1. Delete all legacy script files in your Apps Script editor. You must have only **one** backend file (name it `main.gs`) and copy the code of **`unified-financial-automation-v6.gs`** into it.
 2. We have updated your toolbar menu to replace `createNewSpreadsheet()` with the much smarter, highly requested option: **`Initialize Sheets in This Workbook`**.
 
 ---
@@ -23,7 +25,19 @@ This comprehensive guide serves as the ultimate manual for configuring, testing,
 **The Fix:** 
 Instead of spawning a new sheet, run our new command: **`Initialize Sheets in This Workbook`** (`promptInPlaceInitialization`).
 * This programmatically builds, resets, styles, and links all required database tabs (**`About`**, **`Enum`**, **`Transactions_DB`**, **`Budget_History_DB`**, **`The Monthly Dashboard Tab`**, **`Control`**, **`Category_Rules_DB`**, **`Savings_Goals`**) **directly inside the active workbook you are currently viewing!**
-* Since the sheets are initialized in-place, all of your background Gmail scrapers, daily breach notifications, HTML manual entry APIs, and sidebar interfaces remain **fully connected, active, and scripted** with zero file transfers!
+* Since the sheets are initialized in-place, all of your background Gmail scrapers, daily budget breach notifications, HTML manual entry APIs, and sidebar interfaces remain **fully connected, active, and scripted** with zero file transfers!
+
+---
+
+### C. The "Charts Setup Failed / setChartType" Error
+**The Cause:** In Google Sheets' standard V8 runtime, `Charts.ChartType.DONUT` is an invalid enum value. It throws an exception, crashes the programmatic chart engine, and skips inserting both the Column Chart and the Donut Chart.
+* **The Fix:** We have programmatically updated the category expense breakdown chart type to `Charts.ChartType.PIE` and configured the `.setOption('pieHole', 0.4)` parameter. This creates a beautiful, native donut chart that is fully compatible with Google Sheets' chart engine!
+
+---
+
+### D. Double Confirmation Pop-ups on Sheet Generation
+**The Cause:** Previously, clicking "Generate Automated Sheet" triggered a basic synchronous blocking `ui.alert()` box *and then* immediately opened an HTML modal dialog, causing duplicate popup clicks.
+* **The Fix:** We removed the redundant basic alert and consolidated the success notification into a single HTML modal that contains a direct clickable link to your new spreadsheet.
 
 ---
 
@@ -200,4 +214,4 @@ Create a separate **HTML** file in your Google Apps Script editor, name it exact
 </html>
 ```
 
-*(Note: We added a backend helper function `getDashboardPeriod()` in `unified-financial-automation-v5.gs` to feed the exact selected dropdown year and month directly to this HTML view upon launching!)*
+*(Note: We added a backend helper function `getDashboardPeriod()` in `unified-financial-automation-v6.gs` to feed the exact selected dropdown year and month directly to this HTML view upon launching!)*
