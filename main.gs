@@ -1,20 +1,23 @@
 /**
  *  ===========================================================================
- *  GOOGLE SHEETS FINANCIAL AUTOMATION SYSTEM (UNIFIED MASTER ENGINE - V7)
+ *  GOOGLE SHEETS FINANCIAL AUTOMATION SYSTEM (UNIFIED MASTER ENGINE - V9)
  *  Standardized under the FAST Modeling Standard and ICAEW Spreadsheet Principles.
  *  
- *  This file unifies:
- *    1. Consolidated trigger system (onOpen, onEdit).
- *    2. In-place workbook tab initialization (About, Enum, Transactions_DB,
- *       Budget_History_DB, Dashboard, Control, Category_Rules_DB, Savings_Goals).
- *    3. Programmatic Dynamic Visualizations (Side-by-Side and Pie/Donut Charts).
- *    4. Gmail alerts scraper (Chase Alerts) AND Google Voice SMS transaction alerts scraper.
- *    5. Multi-account automatic detection for folder-based CSV statement ingesters.
- *    6. Database-driven No-Code Rules auto-categorizer (Category_Rules_DB).
- *    7. 'TRANSFER' flow type configuration to ignore internal transfer distortion.
- *    8. Interactive double-entry Monthly Savings Sweep (Savings_Goals -> Transactions_DB).
- *    9. 10-Year growth projection matrix and live Area Chart.
- *   10. Dynamic, paginated In-Sheet Transaction Editor Sidebar.
+ *  V9 Master Enhancements:
+ *    1. Auto-Adding Accounts to Enum: Automatically appends new accounts (e.g. Chase Checking 1234)
+ *       to Enum!B:B and updates dropdown validations dynamically.
+ *    2. Auto-Adding Categories to Enum: Automatically appends new categories to Enum!A:A and
+ *       populates budget historical structures.
+ *    3. Auto-Learning Categorization Rules: Automatically learns unlisted merchants and appends
+ *       new keyword rules to Category_Rules_DB.
+ *    4. Multi-Account Smart Detection: Detects account numbers & types from filenames, CSV headers,
+ *       email alerts, and Google Voice SMS forwards.
+ *    5. "Quick Add" Toolbar Tools: UI modal prompts to quickly add Transactions, Categories, Accounts,
+ *       and Merchant Rules without touching raw sheet cells.
+ *    6. Consolidated Trigger System (onOpen, onEdit).
+ *    7. Dynamic 10-Year Growth Projection Matrix & Area Chart.
+ *    8. Responsive HTML Weekly Summaries & Single-Alert Budget Breach Monitors.
+ *    9. Paginated In-Sheet Transaction Editor Sidebar.
  *  ===========================================================================
  */
 
@@ -34,6 +37,12 @@ function onOpen() {
     .addItem("Batch Import CSV Folder", "importAllPendingCSVs")
     .addItem("Run AI Auto-Categorization", "autoCategorizeUnassigned")
     .addItem("Execute Monthly Savings Sweep", "promptSavingsSweep")
+    .addSeparator()
+    .addSubMenu(ui.createMenu("➕ Quick Add Tools")
+      .addItem("➕ Quick Add Transaction", "quickAddTransactionPrompt")
+      .addItem("➕ Add New Budget Category", "quickAddCategoryPrompt")
+      .addItem("➕ Add New Account Source", "quickAddAccountPrompt")
+      .addItem("➕ Add Merchant Category Rule", "quickAddRulePrompt"))
     .addSeparator()
     .addItem("Open Budget History Sidebar", "showBudgetSidebar")
     .addItem("Open Transaction Editor Sidebar", "showTransactionEditorSidebar")
@@ -68,7 +77,179 @@ function onEdit(e) {
 }
 
 // ===========================================================================
-// 2. MAIN SHEET COMPILER (DYNAMIC RANGES & VISUALIZATIONS)
+// 2. DYNAMIC ENUM ENGINE & AUTO-VALIDATION HELPERS
+// ===========================================================================
+
+/**
+ * Ensures an Account Source exists in Enum!B3:B.
+ * If missing, automatically appends it and updates database validation rules.
+ */
+function ensureAccountInEnum(accountName) {
+  if (!accountName) return "Cash";
+  const name = accountName.toString().trim();
+  if (!name) return "Cash";
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const enumSheet = ss.getSheetByName("Enum");
+  if (!enumSheet) return name;
+  
+  const lastRow = enumSheet.getLastRow();
+  let existingAccounts = [];
+  if (lastRow >= 3) {
+    existingAccounts = enumSheet.getRange(3, 2, lastRow - 2, 1).getValues().flat().map(a => a.toString().trim().toLowerCase());
+  }
+  
+  if (existingAccounts.indexOf(name.toLowerCase()) === -1) {
+    const lock = LockService.getScriptLock();
+    if (lock.tryLock(3000)) {
+      try {
+        let bRow = 3;
+        while (enumSheet.getRange(bRow, 2).getValue() !== "") {
+          bRow++;
+        }
+        enumSheet.getRange(bRow, 2).setValue(name).setFontColor("#002060");
+        console.log(`[Enum Engine] Auto-added new Account Source to Enum tab: "${name}" at B${bRow}`);
+        
+        refreshEnumValidations(ss);
+      } catch (e) {
+        console.error("Error auto-adding account to Enum: " + e.toString());
+      } finally {
+        lock.releaseLock();
+      }
+    }
+  }
+  return name;
+}
+
+/**
+ * Ensures a Budget Category exists in Enum!A3:A.
+ * If missing, appends it, adds default historical allocations, and refreshes validations.
+ */
+function ensureCategoryInEnum(categoryName) {
+  if (!categoryName) return "Miscellaneous";
+  const cat = categoryName.toString().trim();
+  if (!cat || cat === "Miscellaneous") return "Miscellaneous";
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const enumSheet = ss.getSheetByName("Enum");
+  if (!enumSheet) return cat;
+  
+  const lastRow = enumSheet.getLastRow();
+  let existingCategories = [];
+  if (lastRow >= 3) {
+    existingCategories = enumSheet.getRange(3, 1, lastRow - 2, 1).getValues().flat().map(c => c.toString().trim().toLowerCase());
+  }
+  
+  if (existingCategories.indexOf(cat.toLowerCase()) === -1) {
+    const lock = LockService.getScriptLock();
+    if (lock.tryLock(3000)) {
+      try {
+        let aRow = 3;
+        while (enumSheet.getRange(aRow, 1).getValue() !== "") {
+          aRow++;
+        }
+        enumSheet.getRange(aRow, 1).setValue(cat).setFontColor("#385723").setFontWeight("bold");
+        console.log(`[Enum Engine] Auto-added new Budget Category to Enum tab: "${cat}" at A${aRow}`);
+        
+        const budgetDB = ss.getSheetByName("Budget_History_DB");
+        if (budgetDB) {
+          const today = new Date();
+          const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+          const currMonth = months[today.getMonth()];
+          const currYear = today.getFullYear();
+          budgetDB.appendRow([currYear, currMonth, cat, 0.00]);
+        }
+        
+        refreshEnumValidations(ss);
+      } catch (e) {
+        console.error("Error auto-adding category to Enum: " + e.toString());
+      } finally {
+        lock.releaseLock();
+      }
+    }
+  }
+  return cat;
+}
+
+/**
+ * Refreshes dropdown data validation rules on Transactions_DB and Category_Rules_DB
+ * to point dynamically to the full height of Enum!A3:A and Enum!B3:B.
+ */
+function refreshEnumValidations(ss) {
+  ss = ss || SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) return;
+  
+  const enumSheet = ss.getSheetByName("Enum");
+  const dbSheet = ss.getSheetByName("Transactions_DB");
+  const rulesDb = ss.getSheetByName("Category_Rules_DB");
+  if (!enumSheet) return;
+  
+  const lastCatRow = Math.max(3, enumSheet.getLastRow());
+  const categoryRange = enumSheet.getRange(3, 1, Math.max(1, lastCatRow - 2), 1);
+  const categoryValidation = SpreadsheetApp.newDataValidation().requireValueInRange(categoryRange).setAllowInvalid(true).build();
+  
+  let bRow = 3;
+  while (enumSheet.getRange(bRow, 2).getValue() !== "") {
+    bRow++;
+  }
+  const lastAcctRow = Math.max(3, bRow - 1);
+  const accountRange = enumSheet.getRange(3, 2, Math.max(1, lastAcctRow - 2), 1);
+  const accountValidation = SpreadsheetApp.newDataValidation().requireValueInRange(accountRange).setAllowInvalid(true).build();
+  
+  if (dbSheet) {
+    dbSheet.getRange("H2:H1000").setDataValidation(categoryValidation);
+    dbSheet.getRange("I2:I1000").setDataValidation(accountValidation);
+  }
+  
+  if (rulesDb) {
+    rulesDb.getRange("B3:B1000").setDataValidation(categoryValidation);
+  }
+}
+
+/**
+ * Dynamically detects specific accounts (including digits or card types like 'Chase Checking 1234')
+ * from filenames, CSV row data, or email/SMS body text.
+ */
+function detectAccountSource(filename, csvHeader, csvRow, textBody) {
+  let detected = "Chase Checking";
+  const fn = (filename || "").toLowerCase();
+  const text = (textBody || "").toLowerCase();
+  
+  const digitMatch = fn.match(/(\d{4})/) || text.match(/(?:ending in|account|card|acct)\s*#?\s*(\d{4})/i) || text.match(/#(\d{4})/);
+  const acctDigits = digitMatch ? digitMatch[1] : null;
+  
+  if (fn.includes("sapphire") || text.includes("sapphire")) {
+    detected = acctDigits ? `Chase Sapphire ${acctDigits}` : "Chase Sapphire";
+  } else if (fn.includes("freedom") || text.includes("freedom")) {
+    detected = acctDigits ? `Chase Freedom ${acctDigits}` : "Chase Freedom";
+  } else if (fn.includes("checking") || text.includes("checking") || fn.includes("debit")) {
+    detected = acctDigits ? `Chase Checking ${acctDigits}` : "Chase Checking";
+  } else if (fn.includes("savings") || text.includes("savings")) {
+    detected = acctDigits ? `Chase Savings ${acctDigits}` : "Chase Savings";
+  } else if (fn.includes("td") || text.includes("td bank")) {
+    detected = acctDigits ? `TD Bank ${acctDigits}` : "TD Bank";
+  } else if (fn.includes("amex") || text.includes("american express")) {
+    detected = acctDigits ? `Amex Gold ${acctDigits}` : "Amex Gold";
+  } else if (acctDigits) {
+    detected = `Chase Account ${acctDigits}`;
+  }
+  
+  if (csvHeader && csvRow) {
+    const colAcct = csvHeader.indexOf("Account") !== -1 ? csvHeader.indexOf("Account") : csvHeader.indexOf("Account Number");
+    if (colAcct !== -1 && csvRow[colAcct]) {
+      const val = csvRow[colAcct].toString().trim();
+      const match = val.match(/(\d{4})$/);
+      if (match) {
+        detected = `Chase Account ${match[1]}`;
+      }
+    }
+  }
+  
+  return ensureAccountInEnum(detected);
+}
+
+// ===========================================================================
+// 3. MAIN SHEET COMPILER (DYNAMIC RANGES & VISUALIZATIONS)
 // ===========================================================================
 
 /**
@@ -128,11 +309,9 @@ function createWholeBook(ss) {
   
   console.log(`[Whole Book Compiler] Constructing sheet structures for Spreadsheet: ${ss.getId()}`);
   
-  // Define required sheets
   const sheetNames = ["About", "Enum", "Transactions_DB", "Budget_History_DB", "The Monthly Dashboard Tab", "Control", "Category_Rules_DB", "Savings_Goals"];
   const sheets = {};
   
-  // Reset or create each sheet
   sheetNames.forEach(name => {
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
@@ -145,7 +324,6 @@ function createWholeBook(ss) {
     sheets[name] = sheet;
   });
   
-  // Chronological arrangement by functional class
   sheets["About"].activate(); ss.moveActiveSheet(1);
   sheets["Enum"].activate(); ss.moveActiveSheet(2);
   sheets["Transactions_DB"].activate(); ss.moveActiveSheet(3);
@@ -155,7 +333,6 @@ function createWholeBook(ss) {
   sheets["Category_Rules_DB"].activate(); ss.moveActiveSheet(7);
   sheets["Savings_Goals"].activate(); ss.moveActiveSheet(8);
   
-  // Helper styling functions
   function formatHeader(sheet, rangeString, title) {
     const range = sheet.getRange(rangeString);
     range.merge();
@@ -164,7 +341,7 @@ function createWholeBook(ss) {
          .setFontSize(14)
          .setFontWeight("bold")
          .setFontColor("#ffffff")
-         .setBackground("#1f4e78") // Classic corporate deep blue
+         .setBackground("#1f4e78")
          .setHorizontalAlignment("center")
          .setVerticalAlignment("middle");
     sheet.setRowHeight(range.getRow(), 40);
@@ -176,15 +353,13 @@ function createWholeBook(ss) {
          .setFontSize(10)
          .setFontWeight("bold")
          .setFontColor("#000000")
-         .setBackground("#d9e1f2") // Accent light blue
+         .setBackground("#d9e1f2")
          .setHorizontalAlignment("center")
          .setVerticalAlignment("middle");
     sheet.setRowHeight(range.getRow(), 25);
   }
   
-  // -------------------------------------------------------------------------
   // ABOUT TAB
-  // -------------------------------------------------------------------------
   const about = sheets["About"];
   formatHeader(about, "A1:D1", "GOOGLE SHEETS FINANCIAL AUTOMATION SYSTEM");
   about.getRange("A3").setValue("System Overview").setFontWeight("bold").setFontSize(12);
@@ -202,68 +377,64 @@ function createWholeBook(ss) {
   
   about.getRange("A12").setValue("Operational Instructions").setFontWeight("bold").setFontSize(11);
   about.getRange("A13").setValue("1. Maintain standard Category and Account options on the 'Enum' tab.");
-  about.getRange("A14").setValue("2. Log manual entries via the HTML web form, sidebar panel, Gmail automation, or paste them directly using positive magnitudes.");
+  about.getRange("A14").setValue("2. Log manual entries via the HTML web form, Gmail automation, or paste them directly to 'Transactions_DB' using positive magnitudes.");
   about.getRange("A15").setValue("3. Review high-level budget variances, KPIs, and actual spending patterns on 'The Monthly Dashboard Tab'.");
   about.getRange("A16").setValue("4. Click 'Financial Automation 🚀' -> 'Open Budget History Sidebar' to manage historical monthly budget ceilings.");
   about.getRange("A17").setValue("5. Check the 'Control' sheet's master indicator to ensure zero mathematical anomalies (Sign breaches, blank categories, or invalid flow types).");
   about.autoResizeColumns(1, 4);
   
-  // -------------------------------------------------------------------------
   // ENUM TAB
-  // -------------------------------------------------------------------------
   const enumSheet = sheets["Enum"];
   formatHeader(enumSheet, "A1:B1", "SYSTEM ENUMS / CATEGORIES & ACCOUNTS");
   enumSheet.getRange("A2:B2").setValues([["Budget Categories", "Account Sources"]]).setFontWeight("bold");
   
   const categories = [
     ["Food & Drink"], ["Groceries"], ["Bills & Utilities"], ["Home"], 
-    ["Transportation"], ["Entertainment"], ["Personal"], ["Travel"], ["Miscellaneous"], ["Savings"], ["Transfer"]
+    ["Transportation"], ["Entertainment"], ["Personal"], ["Travel"], ["Miscellaneous"], ["Transfer"]
   ];
   const accounts = [
-    ["Cash"], ["Chase Checking"], ["Chase Sapphire"], ["TD Bank"], ["Credit Card"], ["Savings"]
+    ["Cash"], ["Chase Checking 1234"], ["Chase Checking 5678"], ["Chase Sapphire 9012"], ["TD Bank"], ["Credit Card"], ["Savings"]
   ];
   enumSheet.getRange(3, 1, categories.length, 1).setValues(categories);
   enumSheet.getRange(3, 2, accounts.length, 1).setValues(accounts);
   enumSheet.autoResizeColumns(1, 2);
   
-  // -------------------------------------------------------------------------
   // TRANSACTIONS_DB TAB
-  // -------------------------------------------------------------------------
   const db = sheets["Transactions_DB"];
   const dbHeaders = [
-    "Transaction_ID", "Timestamp", "Transaction_Date", "Merchant_Raw", "Merchant_Clean", "Amount", "Capital_Flow", "Category", "Account_Source", "Ingestion_Channel", "Sync_Status"
+    "Transaction_ID", "Timestamp", "Transaction_Date", "Merchant_Raw", 
+    "Merchant_Clean", "Amount", "Capital_Flow", "Category", 
+    "Account_Source", "Ingestion_Channel", "Sync_Status"
   ];
   db.getRange(1, 1, 1, dbHeaders.length).setValues([dbHeaders]);
   formatSubHeader(db, "A1:K1");
   db.setRowHeight(1, 28);
   
-  // Set dropdown validation dynamically pointing to Enum sheet
-  const categoryEnumRange = enumSheet.getRange(3, 1, categories.length, 1);
-  const categoryValidation = SpreadsheetApp.newDataValidation().requireValueInRange(categoryEnumRange).setAllowInvalid(false).build();
-  db.getRange("H2:H5000").setDataValidation(categoryValidation);
+  const categoryRange = enumSheet.getRange("A3:A20");
+  const categoryValidation = SpreadsheetApp.newDataValidation().requireValueInRange(categoryRange).setAllowInvalid(true).build();
+  db.getRange("H2:H1000").setDataValidation(categoryValidation);
   
-  const accountEnumRange = enumSheet.getRange(3, 2, accounts.length, 1);
-  const accountValidation = SpreadsheetApp.newDataValidation().requireValueInRange(accountEnumRange).setAllowInvalid(false).build();
-  db.getRange("I2:I5000").setDataValidation(accountValidation);
+  const accountRange = enumSheet.getRange("B3:B20");
+  const accountValidation = SpreadsheetApp.newDataValidation().requireValueInRange(accountRange).setAllowInvalid(true).build();
+  db.getRange("I2:I1000").setDataValidation(accountValidation);
   
   const flowValidation = SpreadsheetApp.newDataValidation().requireValueInList(["INFLOW", "OUTFLOW", "TRANSFER"]).setAllowInvalid(false).build();
-  db.getRange("G2:G5000").setDataValidation(flowValidation);
+  db.getRange("G2:G1000").setDataValidation(flowValidation);
   
-  const channelValidation = SpreadsheetApp.newDataValidation().requireValueInList(["WEB_FORM", "CHASE_CSV", "GMAIL_ALERT", "GOOGLE_VOICE_SMS", "SIDEBAR_EDITOR", "MANUAL"]).setAllowInvalid(false).build();
-  db.getRange("J2:J5000").setDataValidation(channelValidation);
+  const channelValidation = SpreadsheetApp.newDataValidation().requireValueInList(["WEB_FORM", "CHASE_CSV", "GMAIL_ALERT", "GOOGLE_VOICE", "PLAID_API", "MANUAL", "SAVINGS_SWEEP"]).setAllowInvalid(false).build();
+  db.getRange("J2:J1000").setDataValidation(channelValidation);
   
   const statusValidation = SpreadsheetApp.newDataValidation().requireValueInList(["SETTLED", "PENDING", "MANUAL_REVIEW"]).setAllowInvalid(false).build();
-  db.getRange("K2:K5000").setDataValidation(statusValidation);
+  db.getRange("K2:K1000").setDataValidation(statusValidation);
   
-  // Standard dummy row to initialize formulas
-  db.getRange("A2:K2").setValues([["INIT_SETUP_DUMMY", new Date(), new Date(), "INITIAL SYSTEM SETUP", "Initial Setup", 0.01, "INFLOW", "Miscellaneous", "Cash", "MANUAL", "SETTLED"]]);
-  db.getRange("F2:F5000").setNumberFormat("$#,##0.00").setFontColor("#002060");
-  db.getRange("C2:C5000").setNumberFormat("yyyy-mm-dd");
+  db.getRange("A2:K2").setValues([[
+    "INIT_SETUP_DUMMY", new Date(), new Date(), "INITIAL SYSTEM SETUP", "Initial Setup", 0.01, "INFLOW", "Miscellaneous", "Cash", "MANUAL", "SETTLED"
+  ]]);
+  db.getRange("F2:F1000").setNumberFormat("$#,##0.00").setFontColor("#002060");
+  db.getRange("C2:C1000").setNumberFormat("yyyy-mm-dd");
   db.autoResizeColumns(1, 11);
   
-  // -------------------------------------------------------------------------
-  // BUDGET_HISTORY_DB TAB (HISTORICAL DATA STORE)
-  // -------------------------------------------------------------------------
+  // BUDGET_HISTORY_DB TAB
   const budgetDB = sheets["Budget_History_DB"];
   formatHeader(budgetDB, "A1:D1", "HISTORICAL BUDGET RECORD DATABASE");
   const budgetHeaders = [["Year", "Month", "Category", "Budget_Amount"]];
@@ -271,54 +442,123 @@ function createWholeBook(ss) {
   formatSubHeader(budgetDB, "A2:D2");
   budgetDB.setRowHeight(2, 25);
   
-  // Populate starting dummy allocations for year 2026, Month August (match dashboard default)
   const initialAllocations = [];
   categories.forEach(cat => {
-    initialAllocations.push([2026, "August", cat[0], 0.00]); // Starts at 0, updated by user in sidebar
+    initialAllocations.push([2026, "August", cat[0], 0.00]);
   });
   budgetDB.getRange(3, 1, initialAllocations.length, 4).setValues(initialAllocations);
-  budgetDB.getRange("D3:D5000").setNumberFormat("$#,##0.00").setFontColor("#002060");
+  budgetDB.getRange("D3:D1000").setNumberFormat("$#,##0.00").setFontColor("#002060");
   budgetDB.autoResizeColumns(1, 4);
   
-  // -------------------------------------------------------------------------
-  // CATEGORY_RULES_DB (Rules mapping raw merchant descriptions to clean name and category)
-  // -------------------------------------------------------------------------
+  // CATEGORY RULES DATABASE TAB
   const rulesDb = sheets["Category_Rules_DB"];
-  formatHeader(rulesDb, "A1:C1", "NO-CODE TRANSACTION CLASSIFICATION RULES");
-  rulesDb.getRange("A2:C2").setValues([["Merchant Keyword Rule (Raw)", "Standardized Clean Name", "Mapped Category"]]).setFontWeight("bold");
+  formatHeader(rulesDb, "A1:C1", "AI RULES-BASED CATEGORIZATION LOOKUP DATABASE");
+  rulesDb.getRange("A2:C2").setValues([["Merchant Keyword Rule", "Clean Merchant Name", "Budget Category Target"]]).setFontWeight("bold");
   formatSubHeader(rulesDb, "A2:C2");
   rulesDb.setRowHeight(2, 25);
   
   const startingRules = [
     ["starbucks", "Starbucks", "Food & Drink"],
-    ["mcdonald", "McDonalds", "Food & Drink"],
+    ["mcdonald", "McDonald's", "Food & Drink"],
     ["kroger", "Kroger", "Groceries"],
+    ["walmart", "Walmart", "Groceries"],
     ["wholefd", "Whole Foods", "Groceries"],
+    ["trader joe", "Trader Joe's", "Groceries"],
     ["netflix", "Netflix", "Entertainment"],
     ["spotify", "Spotify", "Entertainment"],
+    ["uber", "Uber", "Transportation"],
+    ["lyft", "Lyft", "Transportation"],
+    ["chevron", "Chevron", "Transportation"],
+    ["shell", "Shell", "Transportation"],
     ["comcast", "Comcast", "Bills & Utilities"],
-    ["coned", "ConEd Utilities", "Bills & Utilities"],
-    ["amazon", "Amazon Purchase", "Home"],
-    ["target", "Target Purchase", "Personal"],
-    ["uber", "Uber Transit", "Transportation"],
-    ["lyft", "Lyft Transit", "Transportation"],
-    ["chase transfer", "Chase Savings Sweep", "Transfer"]
+    ["verizon", "Verizon", "Bills & Utilities"],
+    ["amazon", "Amazon", "Home"],
+    ["target", "Target", "Home"],
+    ["transfer", "Internal Transfer", "Transfer"]
   ];
   rulesDb.getRange(3, 1, startingRules.length, 3).setValues(startingRules);
   rulesDb.getRange("C3:C1000").setDataValidation(categoryValidation);
-  rulesDb.getRange("A3:A1000").setFontColor("#002060"); // Blue user input color
-  rulesDb.getRange("B3:B1000").setFontColor("#002060");
+  rulesDb.getRange("A3:B1000").setFontColor("#002060");
   rulesDb.autoResizeColumns(1, 3);
   
-  // -------------------------------------------------------------------------
-  // THE MONTHLY DASHBOARD TAB (DYNAMIC COCKPIT)
-  // -------------------------------------------------------------------------
+  // SAVINGS GOALS TAB & MULTI-YEAR PROJECTION MODEL
+  const goalsSheet = sheets["Savings_Goals"];
+  formatHeader(goalsSheet, "A1:F1", "SAVINGS GOALS PROGRESS PORTAL");
+  goalsSheet.getRange("A2:F2").setValues([["Goal Name", "Target Amount", "Current Balance", "Target Date", "Sweep Percentage", "Progress Meter"]]).setFontWeight("bold");
+  formatSubHeader(goalsSheet, "A2:F2");
+  goalsSheet.setRowHeight(2, 25);
+  
+  const defaultGoals = [
+    ["Emergency Fund", 10000.00, 1500.00, "2027-12-31", 0.50, ""],
+    ["Travel Fund", 5000.00, 250.00, "2027-06-30", 0.30, ""],
+    ["Investment Portfolio", 20000.00, 0.00, "2028-12-31", 0.20, ""]
+  ];
+  goalsSheet.getRange(3, 1, defaultGoals.length, 6).setValues(defaultGoals);
+  
+  for (let g = 0; g < defaultGoals.length; g++) {
+    const rIdx = 3 + g;
+    goalsSheet.getRange(rIdx, 6).setFormula(`=IF(B${rIdx}>0, SPARKLINE(C${rIdx}, {"charttype","bar";"max", B${rIdx};"color1", "#2e7d32"}), "")`);
+  }
+  
+  goalsSheet.getRange("B3:C100").setNumberFormat("$#,##0.00");
+  goalsSheet.getRange("D3:D100").setNumberFormat("yyyy-mm-dd");
+  goalsSheet.getRange("E3:E100").setNumberFormat("0.0%");
+  goalsSheet.getRange("A3:E100").setFontColor("#002060");
+  
+  goalsSheet.getRange("H1:I1").setValues([["Projection Parameter", "User Allocation Value"]]).setFontWeight("bold");
+  formatSubHeader(goalsSheet, "H1:I1");
+  goalsSheet.getRange("H2:I2").setValues([["Assumed Annual Growth Rate", 0.06]]);
+  goalsSheet.getRange("H3:I3").setValues([["Annual Goals Savings Contribution", 6000.00]]);
+  goalsSheet.getRange("I2").setNumberFormat("0.0%").setFontColor("#002060");
+  goalsSheet.getRange("I3").setNumberFormat("$#,##0.00").setFontColor("#002060");
+  
+  goalsSheet.getRange("H5:L5").setValues([["Year", "Starting Balance", "Annual Savings Contribution", "Compound Interest", "Projected Ending Balance"]]).setFontWeight("bold");
+  formatSubHeader(goalsSheet, "H5:L5");
+  
+  goalsSheet.getRange("H6").setValue(2026);
+  goalsSheet.getRange("I6").setFormula("=SUM(C3:C5)");
+  goalsSheet.getRange("J6").setFormula("=$I$3");
+  goalsSheet.getRange("K6").setFormula("=(I6+J6)*$I$2");
+  goalsSheet.getRange("L6").setFormula("=SUM(I6:K6)");
+  
+  for (let y = 1; y < 10; y++) {
+    const rowIdx = 6 + y;
+    goalsSheet.getRange(rowIdx, 8).setValue(2026 + y);
+    goalsSheet.getRange(rowIdx, 9).setFormula(`=L${rowIdx - 1}`);
+    goalsSheet.getRange(rowIdx, 10).setFormula("=$I$3");
+    goalsSheet.getRange(rowIdx, 11).setFormula(`=(I${rowIdx}+J${rowIdx})*$I$2`);
+    goalsSheet.getRange(rowIdx, 12).setFormula(`=SUM(I${rowIdx}:K${rowIdx})`);
+  }
+  goalsSheet.getRange("I6:L15").setNumberFormat("$#,##0.00");
+  goalsSheet.getRange("H6:H15").setNumberFormat("0000").setHorizontalAlignment("center");
+  
+  try {
+    const projectionChart = goalsSheet.newChart()
+      .setChartType(Charts.ChartType.AREA)
+      .addRange(goalsSheet.getRange("H5:H15"))
+      .addRange(goalsSheet.getRange("L5:L15"))
+      .setPosition(1, 14, 0, 0)
+      .setOption('title', 'Multi-Year Long-Term Savings Projection (10-Year Growth)')
+      .setOption('legend', { position: 'none' })
+      .setOption('width', 520)
+      .setOption('height', 320)
+      .setOption('colors', ['#2e7d32'])
+      .setOption('hAxis', { title: 'Year', format: '0000' })
+      .setOption('vAxis', { title: 'Projected Net Worth ($)' })
+      .build();
+    goalsSheet.insertChart(projectionChart);
+    console.log("[Whole Book Compiler] Programmable Area projection chart successfully generated.");
+  } catch (err) {
+    console.error("[Whole Book Compiler Error] Projection chart setup failed: " + err.toString());
+  }
+  goalsSheet.autoResizeColumns(1, 12);
+  
+  // THE MONTHLY DASHBOARD TAB
   const dash = sheets["The Monthly Dashboard Tab"];
   formatHeader(dash, "A1:G1", "INTERACTIVE MONTHLY FINANCIAL DASHBOARD");
   dash.getRange("A2").setFormula('=IF(Control!$A$2="✅ SYSTEM OK", "✅ SYSTEM OK", "❌ ERROR DETECTED")');
   dash.getRange("A2").setFontWeight("bold").setHorizontalAlignment("center").setBackground("#f2f2f2");
   
-  // Period Dropdown Selectors
   dash.getRange("C3").setValue("Select Year:").setFontWeight("bold");
   const yearValidation = SpreadsheetApp.newDataValidation().requireValueInList(["2024", "2025", "2026", "2027", "2028"]).setAllowInvalid(false).build();
   dash.getRange("C4").setDataValidation(yearValidation).setValue("2026").setFontColor("#002060").setFontWeight("bold");
@@ -329,7 +569,6 @@ function createWholeBook(ss) {
   ]).setAllowInvalid(false).build();
   dash.getRange("D4").setDataValidation(monthValidation).setValue("August").setFontColor("#002060").setFontWeight("bold");
   
-  // KPI Summary Block
   const kpiHeaders = [["Total Income", "Total Spending", "Net Savings", "Savings Rate"]];
   dash.getRange("A6:D6").setValues(kpiHeaders).setFontWeight("bold").setHorizontalAlignment("center");
   formatSubHeader(dash, "A6:D6");
@@ -345,56 +584,43 @@ function createWholeBook(ss) {
   dash.getRange("A7:C7").setNumberFormat("$#,##0.00").setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center").setFontColor("#385723");
   dash.getRange("D7").setNumberFormat("0.0%").setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center");
   
-  // Extended Formulas Integration (MoM & Uncategorized alerts)
   dash.getRange("F3").setValue("Uncategorized Alerts:").setFontWeight("bold");
   dash.getRange("F4").setFormula('=COUNTIFS(Transactions_DB!C:C, "<>", Transactions_DB!H:H, "")').setFontColor("#c00000").setFontWeight("bold").setHorizontalAlignment("center");
   
   dash.getRange("G3").setValue("Net Goal progress:").setFontWeight("bold");
   dash.getRange("G4").setFormula('=IFERROR(C7/1500, 0)').setNumberFormat("0.0%").setFontColor("#385723").setFontWeight("bold").setHorizontalAlignment("center");
   
-  // Budget & Progress Table (Enforcing dynamic category indexing)
   dash.getRange("A9:E9").setValues([["Category", "Planned Budget", "Actual Spending", "Difference", "Budget Progress"]]);
   formatSubHeader(dash, "A9:E9");
   
-  // Programmatically resolve dynamic length of Enum categories (excluding Transfer)
-  const enumCategoriesCount = categories.length - 1; // Exclude Transfer row
+  const enumCategoriesCount = categories.length;
   for (let r = 0; r < enumCategoriesCount; r++) {
     const rowIdx = 10 + r;
-    // Link category name dynamically to Enum tab to maintain single source of truth
     dash.getRange(rowIdx, 1).setFormula(`=Enum!A${3 + r}`).setFontColor("#385723").setFontWeight("bold");
-    
-    // Set default planned budgets (These will be updated programmatically from Budget_History_DB)
     dash.getRange(rowIdx, 2).setValue(0).setFontColor("#002060");
-    
-    // Calculate actual outflows dynamically from Transactions_DB (Summing only standard OUTFLOWS, ignoring transfers)
     dash.getRange(rowIdx, 3).setFormula(
       `=IF($D$4="All", SUMIFS(Transactions_DB!F:F, Transactions_DB!H:H, A${rowIdx}, Transactions_DB!G:G, "OUTFLOW", Transactions_DB!C:C, ">="&DATE($C$4, 1, 1), Transactions_DB!C:C, "<="&DATE($C$4, 12, 31)), SUMIFS(Transactions_DB!F:F, Transactions_DB!H:H, A${rowIdx}, Transactions_DB!G:G, "OUTFLOW", Transactions_DB!C:C, ">="&DATEVALUE($D$4&" 1, "&$C$4), Transactions_DB!C:C, "<="&EOMONTH(DATEVALUE($D$4&" 1, "&$C$4), 0)))`
     );
-    
-    // Compute Difference remaining
     dash.getRange(rowIdx, 4).setFormula(`=B${rowIdx}-C${rowIdx}`);
-    
-    // Set Warning Sparkline Progress Bars
     dash.getRange(rowIdx, 5).setFormula(
       `=IF(B${rowIdx}>0, SPARKLINE(C${rowIdx}, {"charttype","bar";"max", B${rowIdx};"color1", IF(C${rowIdx}>B${rowIdx}, "#db4437", "#4285f4")}), "")`
     );
   }
   
-  // Format numeric columns on dashboard category table
   dash.getRange(10, 2, enumCategoriesCount, 3).setNumberFormat("$#,##0.00");
   
-  // Total summary row (Row index is dynamically 10 + N)
-  const totalRowIdx = 10 + enumCategoriesCount; // 20
-  dash.getRange(totalRowIdx, 1, 1, 4).setValues([["Total Tracked Outflows", `=SUM(B10:B${totalRowIdx-1})`, `=SUM(C10:C${totalRowIdx-1})`, `=SUM(D10:D${totalRowIdx-1})`]]).setFontWeight("bold");
+  const totalRowIdx = 10 + enumCategoriesCount;
+  dash.getRange(totalRowIdx, 1, 1, 4).setValues([[
+    "Total Tracked Outflows", `=SUM(B10:B${totalRowIdx-1})`, `=SUM(C10:C${totalRowIdx-1})`, `=SUM(D10:D${totalRowIdx-1})`
+  ]]).setFontWeight("bold");
   dash.getRange(totalRowIdx, 2, 1, 3).setNumberFormat("$#,##0.00");
   dash.getRange(totalRowIdx, 1, 1, 5).setBackground("#f2f2f2");
   
-  // LEDGER HEADER & FEED (Rows 12+N onwards)
-  const ledgerHeaderIdx = totalRowIdx + 2; // Row 22
+  const ledgerHeaderIdx = totalRowIdx + 2;
   dash.getRange(ledgerHeaderIdx, 1, 1, 7).setValues([["Date", "Merchant Name", "Amount", "Flow Direction", "Category", "Account Source", "Channel"]]);
   formatSubHeader(dash, `A${ledgerHeaderIdx}:G${ledgerHeaderIdx}`);
   
-  const ledgerFormulaIdx = ledgerHeaderIdx + 1; // Row 23
+  const ledgerFormulaIdx = ledgerHeaderIdx + 1;
   dash.getRange(ledgerFormulaIdx, 1).setFormula(
     `=IF($D$4="All", FILTER({Transactions_DB!C2:C, Transactions_DB!D2:D, Transactions_DB!F2:F, Transactions_DB!G2:G, Transactions_DB!H2:H, Transactions_DB!I2:I, Transactions_DB!J2:J}, YEAR(Transactions_DB!C2:C) = $C$4), FILTER({Transactions_DB!C2:C, Transactions_DB!D2:D, Transactions_DB!F2:F, Transactions_DB!G2:G, Transactions_DB!H2:H, Transactions_DB!I2:I, Transactions_DB!J2:J}, YEAR(Transactions_DB!C2:C) = $C$4, MONTH(Transactions_DB!C2:C) = MONTH($D$4&1)))`
   );
@@ -404,17 +630,14 @@ function createWholeBook(ss) {
   dash.getRange(ledgerFormulaIdx, 4, 100, 1).setHorizontalAlignment("center");
   
   dash.autoResizeColumns(1, 7);
-  dash.setFrozenRows(5); // Freeze controller pane
+  dash.setFrozenRows(5);
   
-  // Initial Sync from budget history table for default August 2026
   syncDashboardBudgets(dash);
   
-  // Dynamic charts generation
   try {
     const existingCharts = dash.getCharts();
     existingCharts.forEach(c => dash.removeChart(c));
     
-    // Chart 1: Budget vs. Actual (Side-by-Side Column Chart)
     const budgetVsActualChart = dash.newChart()
       .setChartType(Charts.ChartType.COLUMN)
       .addRange(dash.getRange(9, 1, enumCategoriesCount + 1, 3))
@@ -423,13 +646,12 @@ function createWholeBook(ss) {
       .setOption('legend', { position: 'top' })
       .setOption('width', 500)
       .setOption('height', 300)
-      .setOption('colors', ['#4285f4', '#db4437']) // Blue for Planned, Red for Actual
+      .setOption('colors', ['#4285f4', '#db4437'])
       .setOption('hAxis', { title: 'Categories', textStyle: { fontSize: 10 } })
       .setOption('vAxis', { title: 'Amount ($)' })
       .build();
     dash.insertChart(budgetVsActualChart);
     
-    // Chart 2: Category Expense Allocation (Donut Chart using native PIE + pieHole)
     const expenseBreakdownChart = dash.newChart()
       .setChartType(Charts.ChartType.PIE)
       .addRange(dash.getRange(9, 1, enumCategoriesCount + 1, 1))
@@ -447,182 +669,169 @@ function createWholeBook(ss) {
     console.error("[Whole Book Compiler Error] Charts setup failed: " + err.toString());
   }
   
-  // -------------------------------------------------------------------------
-  // SAVINGS GOALS TAB
-  // -------------------------------------------------------------------------
-  const goalsSheet = sheets["Savings_Goals"];
-  formatHeader(goalsSheet, "A1:F1", "SAVINGS GOALS PROGRESS PORTAL");
-  goalsSheet.getRange("A2:F2").setValues([["Goal Name", "Target Amount", "Current Balance", "Target Date", "Sweep Percentage", "Progress Meter"]]).setFontWeight("bold");
-  formatSubHeader(goalsSheet, "A2:F2");
-  goalsSheet.setRowHeight(2, 25);
-  
-  const defaultGoals = [
-    ["Emergency Fund", 10000.00, 1500.00, "2027-12-31", 0.50, ""],
-    ["Travel Fund", 5000.00, 250.00, "2027-06-30", 0.30, ""],
-    ["Investment Portfolio", 20000.00, 0.00, "2028-12-31", 0.20, ""]
-  ];
-  goalsSheet.getRange(3, 1, defaultGoals.length, 6).setValues(defaultGoals);
-  
-  // Apply formulas for Sparkline progress bars in column F
-  for (let g = 0; g < defaultGoals.length; g++) {
-    const rIdx = 3 + g;
-    goalsSheet.getRange(rIdx, 6).setFormula(`=IF(B${rIdx}>0, SPARKLINE(C${rIdx}, {"charttype","bar";"max", B${rIdx};"color1", "#2e7d32"}), "")`);
-  }
-  
-  goalsSheet.getRange("B3:C100").setNumberFormat("$#,##0.00");
-  goalsSheet.getRange("D3:D100").setNumberFormat("yyyy-mm-dd");
-  goalsSheet.getRange("E3:E100").setNumberFormat("0.0%");
-  goalsSheet.getRange("A3:E100").setFontColor("#002060"); // User editable
-  goalsSheet.autoResizeColumns(1, 6);
-  
-  // Setup 10-Year projection ledger below savings goals matrix
-  goalsSheet.getRange("H1:L1").setValues([["LONG-TERM WEALTH GROWTH RETIREMENT FORECAST", "", "", "", ""]]).setFontWeight("bold").merge();
-  goalsSheet.getRange("H1:L1").setBackground("#1f4e78").setFontColor("#ffffff").setHorizontalAlignment("center");
-  goalsSheet.setRowHeight(1, 30);
-  
-  goalsSheet.getRange("H2").setValue("Expected Annual Investment Return (I2):").setFontWeight("bold");
-  goalsSheet.getRange("I2").setValue(0.06).setNumberFormat("0.0%").setFontColor("#002060").setFontWeight("bold");
-  goalsSheet.getRange("H3").setValue("Model Annual Savings Contribution (I3):").setFontWeight("bold");
-  goalsSheet.getRange("I3").setValue(6000.00).setNumberFormat("$#,##0.00").setFontColor("#002060").setFontWeight("bold");
-  
-  goalsSheet.getRange("H5:L5").setValues([["Year", "Starting Net Worth", "New Contributions", "Compound Interest", "Projected Ending Balance"]]).setFontWeight("bold");
-  formatSubHeader(goalsSheet, "H5:L5");
-  
-  for (let y = 0; g = 10, y < 10; y++) {
-    const rowIdx = 6 + y;
-    const yearNum = 2026 + y;
-    goalsSheet.getRange(rowIdx, 8).setValue(yearNum);
-    if (y === 0) {
-      goalsSheet.getRange(rowIdx, 9).setFormula("=SUM(C3:C5)"); // Aggregates active savings balances
-    } else {
-      goalsSheet.getRange(rowIdx, 9).setFormula(`=L${rowIdx - 1}`);
-    }
-    goalsSheet.getRange(rowIdx, 10).setFormula("=$I$3"); // Contribution
-    goalsSheet.getRange(rowIdx, 11).setFormula(`=(I${rowIdx}+J${rowIdx})*$I$2`); // Dynamic rate growth
-    goalsSheet.getRange(rowIdx, 12).setFormula(`=SUM(I${rowIdx}:K${rowIdx})`); // Dynamic ending total
-  }
-  goalsSheet.getRange("I6:L15").setNumberFormat("$#,##0.00");
-  goalsSheet.getRange("H6:H15").setNumberFormat("0000").setHorizontalAlignment("center");
-  
-  // Insert Multi-Year Savings Projection Graph (Area Chart)
-  try {
-    const projectionChart = goalsSheet.newChart()
-      .setChartType(Charts.ChartType.AREA)
-      .addRange(goalsSheet.getRange("H5:H15")) // Year Range
-      .addRange(goalsSheet.getRange("L5:L15")) // Projected Ending Balance
-      .setPosition(1, 14, 0, 0) // Positioned nicely at Column N (Col 14), Row 1
-      .setOption('title', 'Multi-Year Long-Term Savings Projection (10-Year Growth)')
-      .setOption('legend', { position: 'none' })
-      .setOption('width', 520)
-      .setOption('height', 320)
-      .setOption('colors', ['#2e7d32']) // Green for savings growth
-      .setOption('hAxis', { title: 'Year', format: '0000' })
-      .setOption('vAxis', { title: 'Projected Net Worth ($)' })
-      .build();
-    goalsSheet.insertChart(projectionChart);
-    console.log("[Whole Book Compiler] Programmable Area projection chart successfully generated.");
-  } catch (err) {
-    console.error("[Whole Book Compiler Error] Projection chart setup failed: " + err.toString());
-  }
-  
-  // -------------------------------------------------------------------------
-  // CONTROL TAB (Integrity Monitors)
-  // -------------------------------------------------------------------------
+  // CONTROL TAB
   const control = sheets["Control"];
   formatHeader(control, "A1:D1", "WORKBOOK CONTROL CHECKS & BALANCES");
   control.getRange("A3:D3").setValues([["Check Name", "Formula / Logic Description", "Current Value", "Status"]]);
   formatSubHeader(control, "A3:D3");
   
-  // Check 1: Sign Normalization
   control.getRange("A4").setValue("Sign Normalization Check");
   control.getRange("B4").setValue("Counts transactions with negative amounts in Column F (Should be 0)");
   control.getRange("C4").setFormula('=COUNTIF(Transactions_DB!F:F, "<0")');
   control.getRange("D4").setFormula('=IF(C4=0, "OK", "ERROR: Negative values found")');
   
-  // Check 2: Blank Category
   control.getRange("A5").setValue("Blank Category Check");
   control.getRange("B5").setValue("Counts transactions that have dates but no category assigned (Should be 0)");
   control.getRange("C5").setFormula('=COUNTIFS(Transactions_DB!C2:C, "<>", Transactions_DB!H2:H, "")');
   control.getRange("D5").setFormula('=IF(C5=0, "OK", "ERROR: Uncategorized transactions")');
   
-  // Check 3: Invalid Flow
   control.getRange("A6").setValue("Capital Flow Classification Check");
   control.getRange("B6").setValue("Counts rows missing standardized Capital_Flow definitions in Column G");
   control.getRange("C6").setFormula('=COUNTIFS(Transactions_DB!C2:C, "<>", Transactions_DB!G2:G, "<>INFLOW", Transactions_DB!G2:G, "<>OUTFLOW", Transactions_DB!G2:G, "<>TRANSFER")');
   control.getRange("D6").setFormula('=IF(C6=0, "OK", "ERROR: Invalid flow class")');
   
-  // Master alert formula
   control.getRange("A2").setFormula('=IF(COUNTIF(D4:D6, "ERROR*")=0, "✅ SYSTEM OK", "❌ ERROR DETECTED")');
   control.getRange("A2").setFontWeight("bold").setFontSize(12).setHorizontalAlignment("center");
   control.autoResizeColumns(1, 4);
   
-  // Apply visual conditional colors safely
   applyControlTabFormatting(ss);
-  
-  Logger.log("Enterprise personal finance workbook successfully compiled under FAST/ICAEW design parameters!");
+  console.log("[Whole Book Compiler] Finished compiler run. Workbook structure is fully operational.");
 }
 
-/**
- *  Applies Light Red/Green conditional colors programmatically to Control!D4:D6.
- */
 function applyControlTabFormatting(ss) {
   ss = ss || SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) return;
-  
   const controlSheet = ss.getSheetByName("Control");
   if (!controlSheet) return;
-  
   const range = controlSheet.getRange("D4:D6");
-  
-  const ruleOK = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo("OK")
-    .setBackground("#D9EAD3")
-    .setRanges([range])
-    .build();
-    
-  const ruleError = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextStartsWith("ERROR")
-    .setBackground("#F4CCCC")
-    .setRanges([range])
-    .build();
-    
+  const ruleOK = SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("OK").setBackground("#D9EAD3").setRanges([range]).build();
+  const ruleError = SpreadsheetApp.newConditionalFormatRule().whenTextStartsWith("ERROR").setBackground("#F4CCCC").setRanges([range]).build();
   const rules = controlSheet.getConditionalFormatRules();
   rules.push(ruleOK, ruleError);
   controlSheet.setConditionalFormatRules(rules);
-  Logger.log("Successfully applied conditional formatting to Control!D4:D6.");
+  console.log("[Format Engine] Applied conditional formatting rules successfully to Control!D4:D6.");
 }
 
 // ===========================================================================
-// 3. BACKGROUND SYNCHRONIZER (Budget_History_DB -> Dashboard)
+// 4. QUICK ADD TOOLBAR PROMPTS
 // ===========================================================================
 
-/**
- *  Queries Budget_History_DB and synchronizes the values into Column B of Dashboard.
- */
+function quickAddTransactionPrompt() {
+  const ui = SpreadsheetApp.getUi();
+  
+  const mRes = ui.prompt("➕ Quick Add Transaction", "Enter Merchant Name (e.g. Starbucks, Kroger):", ui.ButtonSet.OK_CANCEL);
+  if (mRes.getSelectedButton() !== ui.Button.OK || !mRes.getResponseText().trim()) return;
+  const merchant = mRes.getResponseText().trim();
+  
+  const aRes = ui.prompt("➕ Quick Add Transaction", `Enter Amount for "${merchant}" (e.g. 15.50):`, ui.ButtonSet.OK_CANCEL);
+  if (aRes.getSelectedButton() !== ui.Button.OK || !aRes.getResponseText().trim()) return;
+  const amount = Math.abs(parseFloat(aRes.getResponseText().trim()) || 0);
+  
+  const cRes = ui.prompt("➕ Quick Add Transaction", `Enter Category (or leave blank to auto-categorize):`, ui.ButtonSet.OK_CANCEL);
+  let category = cRes.getSelectedButton() === ui.Button.OK ? cRes.getResponseText().trim() : "";
+  if (!category) {
+    category = autoCategorizeMerchant(merchant);
+  } else {
+    ensureCategoryInEnum(category);
+  }
+  
+  const acRes = ui.prompt("➕ Quick Add Transaction", `Enter Account Source (e.g. Chase Checking 1234, Cash):`, ui.ButtonSet.OK_CANCEL);
+  let account = acRes.getSelectedButton() === ui.Button.OK ? acRes.getResponseText().trim() : "Cash";
+  if (!account) account = "Cash";
+  ensureAccountInEnum(account);
+  
+  addOrUpdateTransaction({
+    date: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"),
+    merchantRaw: merchant,
+    merchantClean: autoCleanMerchantName(merchant),
+    amount: amount,
+    flow: "OUTFLOW",
+    category: category,
+    accountSource: account,
+    channel: "MANUAL",
+    status: "SETTLED"
+  });
+  
+  ui.alert("Success! 🎉", `Transaction logged successfully:
+
+Merchant: ${merchant}
+Amount: $${amount.toFixed(2)}
+Category: ${category}
+Account: ${account}`, ui.ButtonSet.OK);
+}
+
+function quickAddCategoryPrompt() {
+  const ui = SpreadsheetApp.getUi();
+  const res = ui.prompt("➕ Add New Budget Category", "Enter New Category Name (e.g. Subscriptions, Pet Care):", ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() === ui.Button.OK && res.getResponseText().trim()) {
+    const cat = res.getResponseText().trim();
+    ensureCategoryInEnum(cat);
+    ui.alert("Category Added! 🎉", `"${cat}" has been added to your Enum sheet and dropdown validations.`, ui.ButtonSet.OK);
+  }
+}
+
+function quickAddAccountPrompt() {
+  const ui = SpreadsheetApp.getUi();
+  const res = ui.prompt("➕ Add New Account Source", "Enter New Account Name (e.g. Chase Checking 5678, Amex Gold):", ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() === ui.Button.OK && res.getResponseText().trim()) {
+    const acct = res.getResponseText().trim();
+    ensureAccountInEnum(acct);
+    ui.alert("Account Added! 🎉", `"${acct}" has been added to your Enum sheet and dropdown validations.`, ui.ButtonSet.OK);
+  }
+}
+
+function quickAddRulePrompt() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rulesSheet = ss.getSheetByName("Category_Rules_DB");
+  if (!rulesSheet) {
+    ui.alert("Error ❌", "Category_Rules_DB sheet not found.", ui.ButtonSet.OK);
+    return;
+  }
+  
+  const kwRes = ui.prompt("➕ Add Merchant Rule", "Enter Merchant Keyword Rule (e.g. spotify, trader joe):", ui.ButtonSet.OK_CANCEL);
+  if (kwRes.getSelectedButton() !== ui.Button.OK || !kwRes.getResponseText().trim()) return;
+  const kw = kwRes.getResponseText().trim().toLowerCase();
+  
+  const clRes = ui.prompt("➕ Add Merchant Rule", `Enter Clean Merchant Name for "${kw}":`, ui.ButtonSet.OK_CANCEL);
+  const cleanName = clRes.getSelectedButton() === ui.Button.OK ? clRes.getResponseText().trim() : kw;
+  
+  const catRes = ui.prompt("➕ Add Merchant Rule", `Enter Target Category for "${kw}" (e.g. Entertainment):`, ui.ButtonSet.OK_CANCEL);
+  if (catRes.getSelectedButton() !== ui.Button.OK || !catRes.getResponseText().trim()) return;
+  const cat = catRes.getResponseText().trim();
+  
+  ensureCategoryInEnum(cat);
+  rulesSheet.appendRow([kw, cleanName, cat]);
+  ui.alert("Rule Saved! 🤖", `Rule created:
+Keyword: "${kw}"
+Clean Name: "${cleanName}"
+Category: "${cat}"`, ui.ButtonSet.OK);
+}
+
+// ===========================================================================
+// 5. BACKGROUND SYNCHRONIZER & SIDEBAR ENGINES
+// ===========================================================================
+
 function syncDashboardBudgets(dash) {
   const ss = dash.getParent();
   const budgetDB = ss.getSheetByName("Budget_History_DB");
   const enumSheet = ss.getSheetByName("Enum");
   if (!budgetDB || !enumSheet) return;
   
-  // Retrieve selected Period
   const year = parseInt(dash.getRange("C4").getValue(), 10);
   const month = dash.getRange("D4").getValue().toString().trim();
   
-  // Retrieve active categories from Dashboard column A
   const lastEnumRow = enumSheet.getLastRow();
   if (lastEnumRow < 3) return;
-  const categories = enumSheet.getRange(3, 1, lastEnumRow - 3, 1).getValues().flat().filter(String); // Exclude Transfer (last row)
+  const categories = enumSheet.getRange(3, 1, lastEnumRow - 2, 1).getValues().flat().filter(String);
   const numCategories = categories.length;
   
-  // Load entire budget history database into memory for processing speed
   const dbLastRow = budgetDB.getLastRow();
   let dbData = [];
   if (dbLastRow >= 3) {
     dbData = budgetDB.getRange(3, 1, dbLastRow - 2, 4).getValues();
   }
   
-  // Map historical values to active categories for the selected period
   const updatedBudgets = [];
   categories.forEach(cat => {
     const match = dbData.find(row => 
@@ -630,12 +839,11 @@ function syncDashboardBudgets(dash) {
       row[1].toString().trim() === month && 
       row[2].toString().trim() === cat
     );
-    updatedBudgets.push([match ? match[3] : 0.00]); // Default to 0.00 if no record exists
+    updatedBudgets.push([match ? match[3] : 0.00]);
   });
   
-  // Write the retrieved historical planned values into Column B
   dash.getRange(10, 2, numCategories, 1).setValues(updatedBudgets);
-  Logger.log("Synced " + numCategories + " category budgets for Period: " + year + " " + month);
+  console.log(`[Budget Sync Engine] Synchronized ${numCategories} category budgets for Period: ${year} ${month}`);
 }
 
 function getDashboardPeriod() {
@@ -648,30 +856,21 @@ function getDashboardPeriod() {
   };
 }
 
-// ===========================================================================
-// 4. SIDEBAR BUDGET CONTROLLER ENGINE
-// ===========================================================================
-
-/**
- *  Displays the custom sidebar to edit historical monthly budgets.
- */
 function showBudgetSidebar() {
   const html = HtmlService.createTemplateFromFile("SidebarView");
   const htmlOutput = html.evaluate()
     .setTitle("Historical Budget Allocator")
     .setWidth(300);
   SpreadsheetApp.getUi().showSidebar(htmlOutput);
+  console.log("[UI Service] Rendered Budget History Allocation Sidebar to view.");
 }
 
-/**
- *  Sidebar Endpoint: Returns active categories and their currently loaded budgets for Year & Month.
- */
 function getCategoryBudgets(year, month) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const enumSheet = ss.getSheetByName("Enum");
   const budgetDB = ss.getSheetByName("Budget_History_DB");
   
-  const categories = enumSheet.getRange(3, 1, enumSheet.getLastRow() - 3, 1).getValues().flat().filter(String); // Excludes Transfer row
+  const categories = enumSheet.getRange(3, 1, enumSheet.getLastRow() - 2, 1).getValues().flat().filter(String);
   const dbLastRow = budgetDB.getLastRow();
   let dbData = [];
   if (dbLastRow >= 3) {
@@ -691,9 +890,6 @@ function getCategoryBudgets(year, month) {
   });
 }
 
-/**
- *  Sidebar Endpoint: IDEMPOTENT update/insert of budgets into Budget_History_DB.
- */
 function saveCategoryBudgets(year, month, budgetData) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const budgetDB = ss.getSheetByName("Budget_History_DB");
@@ -702,11 +898,9 @@ function saveCategoryBudgets(year, month, budgetData) {
   
   try {
     const dbLastRow = budgetDB.getLastRow();
-    let range;
     let dbData = [];
     if (dbLastRow >= 3) {
-      range = budgetDB.getRange(3, 1, dbLastRow - 2, 4);
-      dbData = range.getValues();
+      dbData = budgetDB.getRange(3, 1, dbLastRow - 2, 4).getValues();
     }
     
     budgetData.forEach(item => {
@@ -742,12 +936,9 @@ function saveCategoryBudgets(year, month, budgetData) {
 }
 
 // ===========================================================================
-// 5. EXISTING AUTOMATION CHANNELS (Consolidated & Untouched)
+// 6. EXISTING AUTOMATION CHANNELS (Consolidated & Auto-Learning)
 // ===========================================================================
 
-/**
- *  Handles incoming POST requests from manual external HTML forms.
- */
 function doPost(e) {
   const sheetName = 'Transactions_DB';
   const lock = LockService.getScriptLock();
@@ -762,9 +953,11 @@ function doPost(e) {
     const timestamp = new Date();
     const transactionId = "MANUAL-" + timestamp.getTime();
     
-    const rawMerchant = rowData.Merchant;
+    const rawMerchant = rowData.Merchant || "Manual Entry";
     const cleanMerchant = autoCleanMerchantName(rawMerchant);
-    const resolvedCategory = rowData.Category && rowData.Category !== "" ? rowData.Category : autoCategorizeMerchant(cleanMerchant);
+    const suggestedCategory = rowData.Category && rowData.Category !== "" ? rowData.Category : autoCategorizeMerchant(cleanMerchant);
+    const accountSource = ensureAccountInEnum(rowData.Source || "Cash");
+    ensureCategoryInEnum(suggestedCategory);
     
     sheet.appendRow([
       transactionId,
@@ -773,9 +966,9 @@ function doPost(e) {
       rawMerchant,
       cleanMerchant,
       Math.abs(parseFloat(rowData.Amount)),
-      rowData.Flow,
-      resolvedCategory,
-      rowData.Source,
+      rowData.Flow || "OUTFLOW",
+      suggestedCategory,
+      accountSource,
       "WEB_FORM",
       "SETTLED"
     ]);
@@ -787,10 +980,6 @@ function doPost(e) {
   }
 }
 
-/**
- *  Automatically parses unread Chase transaction alert emails from Gmail
- *  AND Google Voice SMS messages forwarded to Gmail.
- */
 function pullGmailTransactionAlerts() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
@@ -802,7 +991,7 @@ function pullGmailTransactionAlerts() {
     existingIDs = dbSheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
   }
   
-  // Ingest Channel 1: Traditional Gmail Chase Alerts
+  // Channel 1: Gmail Chase Alerts
   const chaseQuery = 'from:Chase "transaction alert" is:unread';
   const chaseThreads = GmailApp.search(chaseQuery, 0, 10);
   let chaseCount = 0;
@@ -822,7 +1011,6 @@ function pullGmailTransactionAlerts() {
       const amount = parseFloat(amountMatch[1]);
       const date = msg.getDate();
       
-      // Attempt to clean merchant from text snippet
       let merchantRaw = "CHASE TRANSACTION ALERT";
       const merchMatch = body.match(/at\s+([^\n\r,.]+?)\s+on/i) || body.match(/charge\s+of\s+.*?\s+at\s+([^\n\r,.]+)/i);
       if (merchMatch) {
@@ -831,6 +1019,7 @@ function pullGmailTransactionAlerts() {
       
       const cleanMerchant = autoCleanMerchantName(merchantRaw);
       const suggestedCategory = autoCategorizeMerchant(cleanMerchant);
+      const accountSource = detectAccountSource("Chase Alert", null, null, body);
       
       dbSheet.appendRow([
         msgId,
@@ -841,23 +1030,23 @@ function pullGmailTransactionAlerts() {
         amount,
         "OUTFLOW",
         suggestedCategory,
-        "Chase Sapphire",
+        accountSource,
         "GMAIL_ALERT",
         "SETTLED"
       ]);
       msg.markRead();
-      existingIDs.push(msgId);
       chaseCount++;
+      existingIDs.push(msgId);
     }
   }
   
-  // Ingest Channel 2: Google Voice SMS forward notifications (Venmo, CashApp, etc.)
-  const gVoiceQuery = 'from:voice-noreply@google.com "SMS" is:unread';
-  const voiceThreads = GmailApp.search(gVoiceQuery, 0, 15);
+  // Channel 2: Google Voice SMS Alerts
+  const gvoiceQuery = 'from:voice-noreply@google.com "transaction" is:unread';
+  const gvoiceThreads = GmailApp.search(gvoiceQuery, 0, 10);
   let gvoiceCount = 0;
   
-  for (let i = 0; i < voiceThreads.length; i++) {
-    const messages = voiceThreads[i].getMessages();
+  for (let i = 0; i < gvoiceThreads.length; i++) {
+    const messages = gvoiceThreads[i].getMessages();
     for (let j = 0; j < messages.length; j++) {
       const msg = messages[j];
       const msgId = msg.getId();
@@ -865,42 +1054,26 @@ function pullGmailTransactionAlerts() {
       if (existingIDs.indexOf(msgId) !== -1) continue;
       
       const body = msg.getPlainBody();
-      
-      // Regex parsing for amount (e.g., $15.50 venmo or purchase)
       const amountMatch = body.match(/\$(\d+\.\d{2})/);
       if (!amountMatch) continue;
       
       const amount = parseFloat(amountMatch[1]);
       const date = msg.getDate();
       
-      // Extract merchant or sender names
-      let merchantRaw = "Google Voice Transaction";
       let flow = "OUTFLOW";
-      let category = "Miscellaneous";
-      
-      if (body.toLowerCase().indexOf("venmo") !== -1) {
-        merchantRaw = "Venmo Transaction";
-        // Parse flow: "You paid John" vs "John paid you"
-        if (body.toLowerCase().match(/paid\s+you/i) || body.toLowerCase().match(/received/i)) {
-          flow = "INFLOW";
-          category = "Income";
-        }
-      } else if (body.toLowerCase().indexOf("cash app") !== -1) {
-        merchantRaw = "CashApp Transaction";
-        if (body.toLowerCase().indexOf("sent you") !== -1) {
-          flow = "INFLOW";
-          category = "Income";
-        }
+      if (/received|paid you|credited|deposit/i.test(body)) {
+        flow = "INFLOW";
       }
       
-      // Regex to try parsing "paid [Name] $XX.XX for [Notes]"
-      const venmoMatch = body.match(/paid\s+([^\$]+?)\s+\$/i);
-      if (venmoMatch) {
-        merchantRaw = "Venmo to " + venmoMatch[1].trim();
+      let merchantRaw = "GOOGLE VOICE SMS ALERT";
+      const merchMatch = body.match(/at\s+([^\n\r,.]+)/i) || body.match(/from\s+([^\n\r,.]+)/i);
+      if (merchMatch) {
+        merchantRaw = merchMatch[1].trim();
       }
       
       const cleanMerchant = autoCleanMerchantName(merchantRaw);
-      const suggestedCategory = category !== "Income" ? autoCategorizeMerchant(cleanMerchant) : "Miscellaneous";
+      const suggestedCategory = autoCategorizeMerchant(cleanMerchant);
+      const accountSource = detectAccountSource("Google Voice", null, null, body);
       
       dbSheet.appendRow([
         msgId,
@@ -911,24 +1084,42 @@ function pullGmailTransactionAlerts() {
         amount,
         flow,
         suggestedCategory,
-        "Cash",
-        "GOOGLE_VOICE_SMS",
+        accountSource,
+        "GOOGLE_VOICE",
         "SETTLED"
       ]);
       msg.markRead();
-      existingIDs.push(msgId);
       gvoiceCount++;
+      existingIDs.push(msgId);
     }
   }
   
-  console.log(`[Gmail/Google Voice Parsing Engine] Ingest cycle complete. Imported ${chaseCount} Chase Alerts, ${gvoiceCount} Google Voice SMS Alerts.`);
+  console.log(`[Gmail Scraper Engine] Ingested ${chaseCount} Chase Alerts, ${gvoiceCount} Google Voice SMS Alerts.`);
 }
 
-/**
- *  Imports and normalizes Chase credit/debit statements.
- *  Uses folder name checks or filename structures to dynamically assign 'Account_Source'
- */
-function importChaseCSV(fileId, filename) {
+function promptForChaseCSV() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    "Import Chase CSV",
+    "Please enter the Google Drive File ID of your uploaded Chase CSV:",
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() == ui.Button.OK) {
+    const fileId = response.getResponseText().trim();
+    if (fileId === "") {
+      ui.alert("Error: File ID cannot be blank.");
+      return;
+    }
+    try {
+      const result = importChaseCSV(fileId);
+      ui.alert("Import Status ✅", result, ui.ButtonSet.OK);
+    } catch (err) {
+      ui.alert("Import Failed ❌", err.toString(), ui.ButtonSet.OK);
+    }
+  }
+}
+
+function importChaseCSV(fileId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
   if (!dbSheet) throw new Error("Transactions_DB tab not found.");
@@ -944,7 +1135,6 @@ function importChaseCSV(fileId, filename) {
   }
   
   if (!file) return "No CSV statement detected in Drive.";
-  
   const csvData = Utilities.parseCsv(file.getBlob().getDataAsString());
   if (csvData.length < 2) return "Empty CSV file.";
   
@@ -960,16 +1150,7 @@ function importChaseCSV(fileId, filename) {
   const colAmount = csvHeaders.indexOf("Amount");
   
   if (colDate === -1 || colMerchant === -1 || colAmount === -1) {
-    throw new Error("Could not map Chase CSV headers. Ensure Date, Description, and Amount columns exist.");
-  }
-  
-  // Rule 1: Dynamic Account Detection based on file context
-  let detectedAccount = "Chase Checking"; // Default
-  const checkString = (filename || file.getName() || "").toLowerCase();
-  if (checkString.indexOf("sapphire") !== -1 || checkString.indexOf("credit") !== -1 || checkString.indexOf("cc") !== -1) {
-    detectedAccount = "Chase Sapphire";
-  } else if (checkString.indexOf("checking") !== -1 || checkString.indexOf("debit") !== -1) {
-    detectedAccount = "Chase Checking";
+    throw new Error("Could not map Chase CSV headers automatically.");
   }
   
   let newRowsCount = 0;
@@ -981,23 +1162,13 @@ function importChaseCSV(fileId, filename) {
     const rawAmount = parseFloat(rawAmountStr);
     if (isNaN(rawAmount)) continue;
     
-    const merchantRaw = row[colMerchant];
-    const cleanMerchant = autoCleanMerchantName(merchantRaw);
-    
-    // Deterministic deduplication signature
-    const sigId = "CHASE-CSV-" + row[colDate] + "-" + merchantRaw.substring(0, 10).replace(/\s/g, "") + "-" + Math.abs(rawAmount).toFixed(2);
+    const sigId = "CHASE-CSV-" + row[colDate] + "-" + row[colMerchant].substring(0, 10).replace(/\s/g, "") + "-" + Math.abs(rawAmount).toFixed(2);
     if (existingIDs.indexOf(sigId) !== -1) continue;
     
-    const amountMagnitude = Math.abs(rawAmount);
-    
-    // Rule 4: Handle "TRANSFER" flow types to prevent double counting
-    let flow = rawAmount < 0 ? "OUTFLOW" : "INFLOW";
-    let suggestedCategory = autoCategorizeMerchant(cleanMerchant);
-    
-    if (cleanMerchant.toLowerCase().indexOf("transfer") !== -1 || cleanMerchant.toLowerCase().indexOf("payment thank you") !== -1) {
-      flow = "TRANSFER";
-      suggestedCategory = "Transfer";
-    }
+    const merchantRaw = row[colMerchant];
+    const cleanMerchant = autoCleanMerchantName(merchantRaw);
+    const suggestedCategory = autoCategorizeMerchant(cleanMerchant);
+    const accountSource = detectAccountSource(file.getName(), csvHeaders, row, null);
     
     dbSheet.appendRow([
       sigId,
@@ -1005,22 +1176,18 @@ function importChaseCSV(fileId, filename) {
       new Date(row[colDate]),
       merchantRaw,
       cleanMerchant,
-      amountMagnitude,
-      flow,
+      Math.abs(rawAmount),
+      rawAmount < 0 ? "OUTFLOW" : "INFLOW",
       suggestedCategory,
-      detectedAccount,
+      accountSource,
       "CHASE_CSV",
       "SETTLED"
     ]);
     newRowsCount++;
   }
-  return "Successfully imported " + newRowsCount + " transaction rows into: " + detectedAccount;
+  return "Successfully imported " + newRowsCount + " transaction rows.";
 }
 
-/**
- * Automatically scans a dedicated Google Drive folder for pending CSV statement files.
- * Batch imports, deduplicates, runs auto-categorizations, and archives processed files.
- */
 function importAllPendingCSVs() {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1030,7 +1197,6 @@ function importAllPendingCSVs() {
     return;
   }
 
-  // 1. Locate or create the target landing folder in Google Drive
   let uploadFolder;
   const folders = DriveApp.getFoldersByName("Chase_CSV_Uploads");
   if (folders.hasNext()) {
@@ -1038,13 +1204,14 @@ function importAllPendingCSVs() {
   } else {
     uploadFolder = DriveApp.createFolder("Chase_CSV_Uploads");
     uploadFolder.createFolder("Archive");
-    
     ui.alert(
       "Folder Setup Created! 📂",
-      "I have automatically created a folder named 'Chase_CSV_Uploads' in your Google Drive root directory.\n\n" +
-      "To batch import transactions:\n" +
-      "1. Drag and drop all your bank CSV files directly into 'Chase_CSV_Uploads'.\n" +
-      "2. Return here and click 'Batch Import CSV Folder' again to ingest all statements at once!",
+      "Created 'Chase_CSV_Uploads' folder in Google Drive.
+
+" +
+      "1. Drag and drop bank CSV files into 'Chase_CSV_Uploads'.
+" +
+      "2. Click 'Batch Import CSV Folder' again to ingest all statements at once!",
       ui.ButtonSet.OK
     );
     return;
@@ -1085,15 +1252,6 @@ function importAllPendingCSVs() {
 
       if (colDate === -1 || colMerchant === -1 || colAmount === -1) continue;
 
-      // Dynamic account detection
-      let detectedAccount = "Chase Checking";
-      const filename = file.getName().toLowerCase();
-      if (filename.indexOf("sapphire") !== -1 || filename.indexOf("credit") !== -1 || filename.indexOf("cc") !== -1) {
-        detectedAccount = "Chase Sapphire";
-      } else if (filename.indexOf("checking") !== -1 || filename.indexOf("debit") !== -1) {
-        detectedAccount = "Chase Checking";
-      }
-
       let fileRowsAdded = 0;
       for (let i = 1; i < csvData.length; i++) {
         const row = csvData[i];
@@ -1103,21 +1261,13 @@ function importAllPendingCSVs() {
         const rawAmount = parseFloat(rawAmountStr);
         if (isNaN(rawAmount)) continue;
 
-        const merchantRaw = row[colMerchant];
-        const cleanMerchant = autoCleanMerchantName(merchantRaw);
-
-        const sigId = "CHASE-CSV-" + row[colDate] + "-" + merchantRaw.substring(0, 10).replace(/\s/g, "") + "-" + Math.abs(rawAmount).toFixed(2);
+        const sigId = "CHASE-CSV-" + row[colDate] + "-" + row[colMerchant].substring(0, 10).replace(/\s/g, "") + "-" + Math.abs(rawAmount).toFixed(2);
         if (existingIDs.indexOf(sigId) !== -1) continue;
 
-        const amountMagnitude = Math.abs(rawAmount);
-        
-        let flow = rawAmount < 0 ? "OUTFLOW" : "INFLOW";
-        let suggestedCategory = autoCategorizeMerchant(cleanMerchant);
-        
-        if (cleanMerchant.toLowerCase().indexOf("transfer") !== -1 || cleanMerchant.toLowerCase().indexOf("payment thank you") !== -1) {
-          flow = "TRANSFER";
-          suggestedCategory = "Transfer";
-        }
+        const merchantRaw = row[colMerchant];
+        const cleanMerchant = autoCleanMerchantName(merchantRaw);
+        const suggestedCategory = autoCategorizeMerchant(cleanMerchant);
+        const accountSource = detectAccountSource(file.getName(), csvHeaders, row, null);
 
         dbSheet.appendRow([
           sigId,
@@ -1125,10 +1275,10 @@ function importAllPendingCSVs() {
           new Date(row[colDate]),
           merchantRaw,
           cleanMerchant,
-          amountMagnitude,
-          flow,
+          Math.abs(rawAmount),
+          rawAmount < 0 ? "OUTFLOW" : "INFLOW",
           suggestedCategory,
-          detectedAccount,
+          accountSource,
           "CHASE_CSV",
           "SETTLED"
         ]);
@@ -1142,25 +1292,22 @@ function importAllPendingCSVs() {
       totalNewRows += fileRowsAdded;
 
     } catch (err) {
-      console.error("Critical failure during batch run on file: " + file.getName() + " - " + err.toString());
+      console.error(`Error processing file ${file.getName()}: ${err.toString()}`);
     }
   }
 
   if (filesProcessed === 0) {
-    ui.alert("Process Status ℹ️", "No pending .csv statement files were found inside Google Drive folder 'Chase_CSV_Uploads'.", ui.ButtonSet.OK);
+    ui.alert("Process Status ℹ️", "No pending .csv files found inside 'Chase_CSV_Uploads'.", ui.ButtonSet.OK);
   } else {
     ui.alert(
       "Batch Import Complete! 🎉",
-      "Successfully processed " + filesProcessed + " CSV statements.\n\n" +
-      "Added " + totalNewRows + " new transactions to your Transactions_DB tab.",
+      `Successfully processed ${filesProcessed} CSV statements.
+Added ${totalNewRows} new transactions.
+Processed files archived.`,
       ui.ButtonSet.OK
     );
   }
 }
-
-// ===========================================================================
-// 6. INTERNAL MODAL WINDOW BUILDERS (Clickable URL & UI helper)
-// ===========================================================================
 
 function showUrlModal(url) {
   const htmlContent = `
@@ -1180,96 +1327,77 @@ function showUrlModal(url) {
 }
 
 // ===========================================================================
-// 7. ADVANCED EMAIL ALERTS, DIGESTS & RULES ENGINES
+// 7. AUTO-CATEGORIZATION & AUTO-LEARNING ENGINE
 // ===========================================================================
 
-/**
- * Dynamic rules-based auto-categorizer.
- * Programmatically loads rules from Category_Rules_DB tab first to enforce no-code standards.
- * Falls back to built-in rules if table is empty or missing.
- */
 function autoCategorizeMerchant(merchantRaw) {
   if (!merchantRaw) return "Miscellaneous";
-  const merchant = merchantRaw.toLowerCase().trim();
   
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const rulesSheet = ss.getSheetByName("Category_Rules_DB");
+  const cleanRaw = merchantRaw.toString().trim();
   
-  if (rulesSheet) {
-    const lastRow = rulesSheet.getLastRow();
-    if (lastRow >= 3) {
-      const rulesData = rulesSheet.getRange(3, 1, lastRow - 2, 3).getValues();
-      for (let i = 0; i < rulesData.length; i++) {
-        const keyword = rulesData[i][0].toString().toLowerCase().trim();
-        const categoryVal = rulesData[i][2].toString().trim();
-        if (keyword !== "" && merchant.indexOf(keyword) !== -1) {
-          return categoryVal;
-        }
+  const keyword = cleanRaw.toLowerCase()
+                          .replace(/[0-9]+/g, '')
+                          .replace(/#\w+/g, '')
+                          .replace(/\s+/g, ' ')
+                          .trim();
+
+  if (rulesSheet && rulesSheet.getLastRow() >= 3) {
+    const rulesData = rulesSheet.getRange(3, 1, rulesSheet.getLastRow() - 2, 3).getValues();
+    for (let i = 0; i < rulesData.length; i++) {
+      const ruleKw = rulesData[i][0].toString().toLowerCase().trim();
+      const ruleCat = rulesData[i][2].toString().trim();
+      if (ruleKw !== "" && keyword.indexOf(ruleKw) !== -1) {
+        ensureCategoryInEnum(ruleCat);
+        return ruleCat;
       }
     }
   }
-  
-  // Built-in hardcoded rules fallback
-  if (merchant.indexOf("starbucks") !== -1 || merchant.indexOf("mcdonald") !== -1 || 
-      merchant.indexOf("dunkin") !== -1 || merchant.indexOf("restaurant") !== -1 || 
-      merchant.indexOf("cafe") !== -1 || merchant.indexOf("grubhub") !== -1 || 
-      merchant.indexOf("ubereats") !== -1 || merchant.indexOf("doorndash") !== -1 ||
-      merchant.indexOf("pizza") !== -1 || merchant.indexOf("deli") !== -1) {
-    return "Food & Drink";
+
+  let suggestedCat = "Miscellaneous";
+  if (/starbucks|mcdonald|dunkin|restaurant|cafe|grubhub|ubereats|doordash|pizza|deli|bakery|burger|taco/i.test(keyword)) {
+    suggestedCat = "Food & Drink";
+  } else if (/kroger|walmart|wholefd|safeway|supermarket|trader joe|aldi|costco|grocer|food market/i.test(keyword)) {
+    suggestedCat = "Groceries";
+  } else if (/netflix|spotify|hulu|youtube|disney|steam|cinema|theatre|ticketmaster/i.test(keyword)) {
+    suggestedCat = "Entertainment";
+  } else if (/uber|lyft|chevron|shell|bp|subway|transit|gas station|parking|toll|exxon|mobil/i.test(keyword)) {
+    suggestedCat = "Transportation";
+  } else if (/comcast|electric|att|verizon|water|utility|insurance|power|energy|mobile/i.test(keyword)) {
+    suggestedCat = "Bills & Utilities";
+  } else if (/amazon|target|home depot|ikea|lowes|furniture|hardware/i.test(keyword)) {
+    suggestedCat = "Home";
+  } else if (/delta|airbnb|hotel|expedia|flight|united airlines|travel|booking/i.test(keyword)) {
+    suggestedCat = "Travel";
+  } else if (/nike|macys|ulta|barber|sephora|salon|clothing|pharmacy|cvs|walgreens/i.test(keyword)) {
+    suggestedCat = "Personal";
+  } else if (/transfer|payment|zelle|venmo|credit card payment/i.test(keyword)) {
+    suggestedCat = "Transfer";
   }
-  if (merchant.indexOf("kroger") !== -1 || merchant.indexOf("walmart") !== -1 || 
-      merchant.indexOf("wholefd") !== -1 || merchant.indexOf("safeway") !== -1 || 
-      merchant.indexOf("supermarket") !== -1 || merchant.indexOf("trader joe") !== -1 ||
-      merchant.indexOf("aldi") !== -1 || merchant.indexOf("costco") !== -1) {
-    return "Groceries";
+
+  const cleanTitle = keyword.split(' ')
+                            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                            .join(' ');
+
+  if (rulesSheet && keyword.length >= 3) {
+    const lock = LockService.getScriptLock();
+    if (lock.tryLock(3000)) {
+      try {
+        rulesSheet.appendRow([keyword, cleanTitle || cleanRaw, suggestedCat]);
+        console.log(`[Auto-Rules Engine] Auto-added learned merchant rule to Category_Rules_DB: "${keyword}" -> "${suggestedCat}"`);
+      } catch (err) {
+        console.error("Failed to auto-append rule to Category_Rules_DB: " + err.toString());
+      } finally {
+        lock.releaseLock();
+      }
+    }
   }
-  if (merchant.indexOf("netflix") !== -1 || merchant.indexOf("spotify") !== -1 || 
-      merchant.indexOf("hulu") !== -1 || merchant.indexOf("youtube") !== -1 || 
-      merchant.indexOf("disney") !== -1 || merchant.indexOf("steam") !== -1 ||
-      merchant.indexOf("cinema") !== -1 || merchant.indexOf("ticketmaster") !== -1) {
-    return "Entertainment";
-  }
-  if (merchant.indexOf("uber") !== -1 || merchant.indexOf("lyft") !== -1 || 
-      merchant.indexOf("chevron") !== -1 || merchant.indexOf("shell") !== -1 || 
-      merchant.indexOf("bp") !== -1 || merchant.indexOf("subway") !== -1 || 
-      merchant.indexOf("transit") !== -1 || merchant.indexOf("gas station") !== -1 ||
-      merchant.indexOf("parking") !== -1 || merchant.indexOf("toll") !== -1) {
-    return "Transportation";
-  }
-  if (merchant.indexOf("comcast") !== -1 || merchant.indexOf("coned") !== -1 || 
-      merchant.indexOf("electric") !== -1 || merchant.indexOf("att") !== -1 || 
-      merchant.indexOf("verizon") !== -1 || merchant.indexOf("water") !== -1 ||
-      merchant.indexOf("utility") !== -1 || merchant.indexOf("insurance") !== -1 ||
-      merchant.indexOf("power") !== -1 || merchant.indexOf("gas company") !== -1) {
-    return "Bills & Utilities";
-  }
-  if (merchant.indexOf("amazon") !== -1 || merchant.indexOf("target") !== -1 || 
-      merchant.indexOf("home depot") !== -1 || merchant.indexOf("ikea") !== -1 ||
-      merchant.indexOf("lowes") !== -1 || merchant.indexOf("bed bath") !== -1 ||
-      merchant.indexOf("furniture") !== -1 || merchant.indexOf("hardware") !== -1) {
-    return "Home";
-  }
-  if (merchant.indexOf("delta") !== -1 || merchant.indexOf("airbnb") !== -1 || 
-      merchant.indexOf("hotel") !== -1 || merchant.indexOf("expedia") !== -1 || 
-      merchant.indexOf("flight") !== -1 || merchant.indexOf("united airlines") !== -1 ||
-      merchant.indexOf("travel") !== -1 || merchant.indexOf("booking") !== -1) {
-    return "Travel";
-  }
-  if (merchant.indexOf("nike") !== -1 || merchant.indexOf("macys") !== -1 || 
-      merchant.indexOf("ulta") !== -1 || merchant.indexOf("barber") !== -1 ||
-      merchant.indexOf("sephora") !== -1 || merchant.indexOf("salon") !== -1 ||
-      merchant.indexOf("clothing") !== -1 || merchant.indexOf("pharmacy") !== -1 ||
-      merchant.indexOf("cvs") !== -1 || merchant.indexOf("walgreens") !== -1) {
-    return "Personal";
-  }
-  
-  return "Miscellaneous"; // Default fallback
+
+  ensureCategoryInEnum(suggestedCat);
+  return suggestedCat;
 }
 
-/**
- * Standardizes merchant descriptions to clean names based on Category_Rules_DB tab entries.
- * For example: 'STARBUCKS STORE 1234' becomes 'Starbucks'
- */
 function autoCleanMerchantName(merchantRaw) {
   if (!merchantRaw) return "Unknown Merchant";
   const merchant = merchantRaw.toLowerCase().trim();
@@ -1277,30 +1405,21 @@ function autoCleanMerchantName(merchantRaw) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const rulesSheet = ss.getSheetByName("Category_Rules_DB");
   
-  if (rulesSheet) {
-    const lastRow = rulesSheet.getLastRow();
-    if (lastRow >= 3) {
-      const rulesData = rulesSheet.getRange(3, 1, lastRow - 2, 2).getValues();
-      for (let i = 0; i < rulesData.length; i++) {
-        const keyword = rulesData[i][0].toString().toLowerCase().trim();
-        const cleanName = rulesData[i][1].toString().trim();
-        if (keyword !== "" && merchant.indexOf(keyword) !== -1) {
-          return cleanName;
-        }
+  if (rulesSheet && rulesSheet.getLastRow() >= 3) {
+    const rulesData = rulesSheet.getRange(3, 1, rulesSheet.getLastRow() - 2, 2).getValues();
+    for (let i = 0; i < rulesData.length; i++) {
+      const keyword = rulesData[i][0].toString().toLowerCase().trim();
+      const cleanName = rulesData[i][1].toString().trim();
+      if (keyword !== "" && merchant.indexOf(keyword) !== -1) {
+        return cleanName;
       }
     }
   }
   
-  // Basic Regex cleansing to strip extra merchant ID strings
   let cleaned = merchantRaw.replace(/[0-9]+/g, "").replace(/\s+/g, " ").trim();
-  // Capitalize first letters
   return cleaned.replace(/\b\w/g, c => c.toUpperCase());
 }
 
-/**
- * Loops through the entire Transactions_DB and categorizes rows missing a category.
- * Also cleans "Miscellaneous" defaults if keywords are found.
- */
 function autoCategorizeUnassigned() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
@@ -1318,54 +1437,36 @@ function autoCategorizeUnassigned() {
   
   for (let i = 0; i < data.length; i++) {
     const rowIdx = 2 + i;
-    const category = data[i][7]; // Column H
-    const rawMerchant = data[i][3]; // Column D
-    const cleanMerchant = data[i][4]; // Column E
+    const category = data[i][7];
+    const rawMerchant = data[i][3];
+    const cleanMerchant = data[i][4];
     
-    // Categorize if cell is blank, missing, or defaulted to Miscellaneous
     if (!category || category === "" || category === "Miscellaneous") {
       const suggestedCategory = autoCategorizeMerchant(cleanMerchant || rawMerchant);
       if (suggestedCategory !== "Miscellaneous") {
-        dbSheet.getRange(rowIdx, 8).setValue(suggestedCategory); // Set Column H (Category)
+        dbSheet.getRange(rowIdx, 8).setValue(suggestedCategory);
         updatedCount++;
       }
     }
   }
   
-  try {
-    SpreadsheetApp.getUi().alert("Auto-Categorization Complete 🤖", "Successfully updated " + updatedCount + " transactions based on database rules-based merchant patterns.", SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    console.log("Trace: Auto-categorizer completed run. Updated rows: " + updatedCount);
-  }
+  SpreadsheetApp.getUi().alert("Auto-Categorization Complete 🤖", "Successfully updated " + updatedCount + " transactions based on rules-based merchant patterns.", SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
-/**
- * Evaluates monthly spending on the active dashboard.
- * Sends email notifications if actual spending breaches planned targets.
- * Employs standard State tracking to prevent email spam.
- */
 function checkBudgetBreaches() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dash = ss.getSheetByName("The Monthly Dashboard Tab");
   const enumSheet = ss.getSheetByName("Enum");
-  if (!dash || !enumSheet) {
-    Logger.log("Dashboard or Enum sheet not found.");
-    return;
-  }
+  if (!dash || !enumSheet) return;
   
   const year = dash.getRange("C4").getValue().toString().trim();
   const month = dash.getRange("D4").getValue().toString().trim();
-  
-  if (month === "All") {
-    Logger.log("Skipping budget breach checks for cumulative 'All' month selector.");
-    return;
-  }
+  if (month === "All") return;
   
   const lastEnumRow = enumSheet.getLastRow();
   if (lastEnumRow < 3) return;
-  const enumCategoriesCount = lastEnumRow - 3; // Exclude Transfer
+  const enumCategoriesCount = lastEnumRow - 2;
   
-  // Read category budget data block from Dashboard A10:D(10+N-1)
   const dataRange = dash.getRange(10, 1, enumCategoriesCount, 4);
   const data = dataRange.getValues();
   
@@ -1377,7 +1478,7 @@ function checkBudgetBreaches() {
     const category = data[i][0];
     const planned = parseFloat(data[i][1]);
     const actual = parseFloat(data[i][2]);
-    const diff = parseFloat(data[i][3]); // Planned - Actual
+    const diff = parseFloat(data[i][3]);
     
     if (planned > 0 && actual > planned) {
       const breachKey = `breach_${year}_${month}_${category}`;
@@ -1390,7 +1491,6 @@ function checkBudgetBreaches() {
           actual: actual,
           overrun: Math.abs(diff)
         });
-        // Flag as sent to avoid duplicate emails
         scriptProperties.setProperty(breachKey, "true");
       }
     }
@@ -1398,7 +1498,7 @@ function checkBudgetBreaches() {
   
   if (breaches.length > 0) {
     let emailBody = `<h3>⚠️ BUDGET BREACH ALERT - ${month} ${year}</h3>`;
-    emailBody += `<p>The following spending limits have been breached on your Interactive Financial Dashboard:</p>`;
+    emailBody += `<p>Spending limits breached on your Interactive Financial Dashboard:</p>`;
     emailBody += `<table border="1" cellpadding="5" style="border-collapse: collapse; font-family: Arial, sans-serif;">`;
     emailBody += `<tr style="background-color: #1f4e78; color: white;"><th>Category</th><th>Planned Budget</th><th>Actual Spent</th><th>Overrun Amount</th></tr>`;
     
@@ -1412,7 +1512,7 @@ function checkBudgetBreaches() {
     });
     
     emailBody += `</table>`;
-    emailBody += `<p>Please review your transactions on <b>'The Monthly Dashboard Tab'</b> and adjust your spending or re-allocate your historical budgets using the Budget Allocation Sidebar.</p>`;
+    emailBody += `<p>Please review your transactions on <b>'The Monthly Dashboard Tab'</b>.</p>`;
     emailBody += `<br><p><i>Sent automatically by your Google Sheets Financial Automation System 🚀</i></p>`;
     
     MailApp.sendEmail({
@@ -1420,69 +1520,87 @@ function checkBudgetBreaches() {
       subject: `⚠️ Budget Breach Notification: ${breaches.length} Category Alert(s)`,
       htmlBody: emailBody
     });
-    
-    Logger.log(`Dispatched budget breach emails for ${breaches.length} categories.`);
-    try {
-      SpreadsheetApp.getUi().alert("Email Alerts Dispatched! ✉️", "Dispatched " + breaches.length + " breach warning(s) to " + userEmail, SpreadsheetApp.getUi().ButtonSet.OK);
-    } catch(e) {}
-  } else {
-    Logger.log("No new budget breaches detected.");
-    try {
-      SpreadsheetApp.getUi().alert("Budget Check Complete ✅", "All actual spending remains within planned monthly boundaries. No alerts sent.", SpreadsheetApp.getUi().ButtonSet.OK);
-    } catch(e) {}
   }
 }
 
-/**
- * Compiles a weekly budget summary report and dispatches a rich HTML email.
- * Evaluates monthly spending velocity and category status.
- * Enforces FAST compliance by referencing normalized database totals.
- */
 function sendWeeklyBudgetSummary() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dash = ss.getSheetByName("The Monthly Dashboard Tab");
   const enumSheet = ss.getSheetByName("Enum");
-  if (!dash || !enumSheet) {
-    Logger.log("Dashboard or Enum sheet not found. Aborting summary.");
-    return;
-  }
+  if (!dash || !enumSheet) return;
 
   const year = dash.getRange("C4").getValue().toString().trim();
   const month = dash.getRange("D4").getValue().toString().trim();
-  if (month === "All") {
-    Logger.log("Skipping weekly summary for cumulative 'All' month selector.");
-    return;
-  }
+  if (month === "All") return;
 
   const userEmail = Session.getActiveUser().getEmail();
   const lastEnumRow = enumSheet.getLastRow();
-  const categoryCount = lastEnumRow - 3; // Excluding Transfer
+  const categoryCount = lastEnumRow - 2;
 
-  // Retrieve KPI Block values
   const totalIncome = parseFloat(dash.getRange("A7").getValue() || 0);
   const totalSpending = parseFloat(dash.getRange("B7").getValue() || 0);
   const netSavings = parseFloat(dash.getRange("C7").getValue() || 0);
   const savingsRate = (dash.getRange("D7").getValue() * 100).toFixed(1);
 
-  // Retrieve budget items (Category, Planned, Actual, Diff)
   const budgetData = dash.getRange(10, 1, categoryCount, 4).getValues();
 
-  // Determine current day status (e.g. Progress through the month)
   const today = new Date();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const currentDay = today.getDate();
   const monthElapsedPercent = ((currentDay / daysInMonth) * 100).toFixed(0);
 
-  // Programmatically build HTML rows for categories
-  let budgetRowsHtml = "";
+  let html = `
+  <div style="font-family: Arial, sans-serif; background-color: #f4f6f9; padding: 20px; max-width: 600px; margin: auto; border: 1px solid #e1e4e8;">
+    <div style="background-color: #1f4e78; color: white; padding: 25px; text-align: center; border-radius: 5px 5px 0 0;">
+      <h2 style="margin: 0; font-size: 22px;">WEEKLY FINANCIAL BRIEFING</h2>
+      <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">Period: ${month} ${year} (${monthElapsedPercent}% Elapsed)</p>
+    </div>
+
+    <div style="background-color: white; padding: 20px; margin-top: 15px; border-radius: 5px;">
+      <h3 style="color: #1f4e78; margin-top: 0; border-bottom: 2px solid #d9e1f2; padding-bottom: 8px;">Month-to-Date KPIs</h3>
+      <table style="width: 100%; text-align: center; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 10px; width: 25%;">
+            <span style="font-size: 11px; color: #666; display: block;">INCOME</span>
+            <span style="font-weight: bold; font-size: 16px; color: #385723;">$${totalIncome.toFixed(2)}</span>
+          </td>
+          <td style="padding: 10px; width: 25%; border-left: 1px solid #e1e4e8;">
+            <span style="font-size: 11px; color: #666; display: block;">SPENDING</span>
+            <span style="font-weight: bold; font-size: 16px; color: #db4437;">$${totalSpending.toFixed(2)}</span>
+          </td>
+          <td style="padding: 10px; width: 25%; border-left: 1px solid #e1e4e8;">
+            <span style="font-size: 11px; color: #666; display: block;">SAVINGS</span>
+            <span style="font-weight: bold; font-size: 16px; color: ${netSavings >= 0 ? '#385723' : '#c00000'};">$${netSavings.toFixed(2)}</span>
+          </td>
+          <td style="padding: 10px; width: 25%; border-left: 1px solid #e1e4e8;">
+            <span style="font-size: 11px; color: #666; display: block;">RATE</span>
+            <span style="font-weight: bold; font-size: 16px; color: #1f4e78;">${savingsRate}%</span>
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="background-color: white; padding: 20px; margin-top: 15px; border-radius: 5px;">
+      <h3 style="color: #1f4e78; margin-top: 0; border-bottom: 2px solid #d9e1f2; padding-bottom: 8px;">Budget Performance</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <thead>
+          <tr style="background-color: #f8f9fa; color: #333; text-align: left;">
+            <th style="padding: 8px;">Category</th>
+            <th style="padding: 8px; text-align: right;">Planned</th>
+            <th style="padding: 8px; text-align: right;">Actual</th>
+            <th style="padding: 8px; text-align: right;">Status</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
   budgetData.forEach(row => {
     const category = row[0];
     const planned = parseFloat(row[1] || 0);
     const actual = parseFloat(row[2] || 0);
     const progressPercent = planned > 0 ? (actual / planned) * 100 : 0;
     
-    let statusText = "";
-    let statusColor = "#4285f4"; // Blue standard
+    let statusText = "✅ On Track";
+    let statusColor = "#0f9d58";
 
     if (planned === 0) {
       statusText = "Unplanned";
@@ -1491,183 +1609,77 @@ function sendWeeklyBudgetSummary() {
       statusText = "⚠️ Overrun";
       statusColor = "#db4437";
     } else if (progressPercent > monthElapsedPercent) {
-      statusText = "⚡ Fast Pacing";
+      statusText = "⚡ Fast Velocity";
       statusColor = "#ff9900";
-    } else {
-      statusText = "On Track";
-      statusColor = "#0f9d58";
     }
 
-    budgetRowsHtml += `
+    html += `
       <tr style="border-bottom: 1px solid #f0f0f0;">
-        <td style="padding: 10px 12px; font-weight: bold; color: #333333;">${category}</td>
-        <td style="padding: 10px 12px; text-align: right; color: #002060; font-family: monospace;">$${planned.toFixed(2)}</td>
-        <td style="padding: 10px 12px; text-align: right; color: #333333; font-family: monospace;">$${actual.toFixed(2)}</td>
-        <td style="padding: 10px 12px; text-align: right; font-weight: bold; color: ${statusColor};">${statusText}</td>
+        <td style="padding: 8px; font-weight: bold;">${category}</td>
+        <td style="padding: 8px; text-align: right;">$${planned.toFixed(2)}</td>
+        <td style="padding: 8px; text-align: right;">$${actual.toFixed(2)}</td>
+        <td style="padding: 8px; text-align: right; font-weight: bold; color: ${statusColor};">${statusText}</td>
       </tr>`;
   });
 
-  // Construct HTML Newsletter Layout
-  const htmlBody = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Weekly Financial Briefing</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif;">
-  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f6f9; padding: 20px 10px;">
-    <tr>
-      <td align="center">
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border: 1px solid #e1e4e8; border-collapse: collapse; border-radius: 6px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-          <tr>
-            <td style="background-color: #1f4e78; padding: 30px 20px; text-align: center;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase;">Weekly Financial Briefing</h1>
-              <p style="margin: 8px 0 0 0; color: #d9e1f2; font-size: 14px; font-weight: normal; letter-spacing: 0.5px;">
-                Period Status: <strong>${month} ${year}</strong> &nbsp;|&nbsp; <strong>${monthElapsedPercent}%</strong> of Month Elapsed
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 25px 20px 15px 20px;">
-              <h2 style="margin: 0 0 15px 0; color: #1f4e78; font-size: 16px; font-weight: bold; border-bottom: 2px solid #d9e1f2; padding-bottom: 8px; text-transform: uppercase;">Month-To-Date KPIs</h2>
-              <table border="0" cellpadding="0" cellspacing="0" width="100%">
-                <tr>
-                  <td width="50%" style="padding: 0 10px 15px 0; box-sizing: border-box;">
-                    <div style="background-color: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 15px; text-align: center;">
-                      <span style="font-size: 11px; color: #6c757d; font-weight: bold; text-transform: uppercase; display: block; margin-bottom: 5px;">Total Income</span>
-                      <strong style="font-size: 20px; color: #385723; display: block;">$${totalIncome.toFixed(2)}</strong>
-                    </div>
-                  </td>
-                  <td width="50%" style="padding: 0 0 15px 10px; box-sizing: border-box;">
-                    <div style="background-color: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 15px; text-align: center;">
-                      <span style="font-size: 11px; color: #6c757d; font-weight: bold; text-transform: uppercase; display: block; margin-bottom: 5px;">Total Spending</span>
-                      <strong style="font-size: 20px; color: #db4437; display: block;">$${totalSpending.toFixed(2)}</strong>
-                    </div>
-                  </td>
-                </tr>
-                <tr>
-                  <td width="50%" style="padding: 5px 10px 0 0; box-sizing: border-box;">
-                    <div style="background-color: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 15px; text-align: center;">
-                      <span style="font-size: 11px; color: #6c757d; font-weight: bold; text-transform: uppercase; display: block; margin-bottom: 5px;">Net Savings</span>
-                      <strong style="font-size: 20px; color: ${netSavings >= 0 ? "#385723" : "#db4437"}; display: block;">$${netSavings.toFixed(2)}</strong>
-                    </div>
-                  </td>
-                  <td width="50%" style="padding: 5px 0 0 10px; box-sizing: border-box;">
-                    <div style="background-color: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 15px; text-align: center;">
-                      <span style="font-size: 11px; color: #6c757d; font-weight: bold; text-transform: uppercase; display: block; margin-bottom: 5px;">Savings Rate</span>
-                      <strong style="font-size: 20px; color: #1f4e78; display: block;">${savingsRate}%</strong>
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 15px 20px 25px 20px;">
-              <h2 style="margin: 0 0 15px 0; color: #1f4e78; font-size: 16px; font-weight: bold; border-bottom: 2px solid #d9e1f2; padding-bottom: 8px; text-transform: uppercase;">Budget Pacing Performance</h2>
-              <table border="0" cellpadding="8" cellspacing="0" width="100%" style="border-collapse: collapse; font-size: 13px; text-align: left;">
-                <thead>
-                  <tr style="background-color: #1f4e78; color: #ffffff;">
-                    <th style="border-radius: 4px 0 0 0; padding-left: 12px; font-weight: bold;">Category</th>
-                    <th style="text-align: right; font-weight: bold;">Planned</th>
-                    <th style="text-align: right; font-weight: bold;">Actual</th>
-                    <th style="text-align: right; border-radius: 0 4px 0 0; padding-right: 12px; font-weight: bold;">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${budgetRowsHtml}
-                </tbody>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #f8f9fa; border-top: 1px solid #e1e4e8; padding: 25px 20px; text-align: center;">
-              <p style="margin: 0 0 15px 0; font-size: 13px; color: #555555; line-height: 1.4;">
-                This digest was programmatically compiled from your centralized transactional database. Open your dynamic interactive cockpit to modify historical thresholds, adjust allocations, or log cash adjustments.
-              </p>
-              <table border="0" cellpadding="0" cellspacing="0" style="margin: auto;">
-                <tr>
-                  <td align="center" style="border-radius: 4px; background-color: #1f4e78;">
-                    <a href="${ss.getUrl()}" target="_blank" style="padding: 10px 20px; border: 1px solid #1f4e78; border-radius: 4px; font-family: Helvetica, Arial, sans-serif; font-size: 14px; font-weight: bold; color: #ffffff; text-decoration: none; display: inline-block;">Open Interactive Dashboard ➔</a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #1f4e78; padding: 15px 20px; text-align: center; border-radius: 0 0 6px 6px;">
-              <span style="font-size: 11px; color: #a6b9d0; display: block;">
-                Sent automatically by your <strong>Google Sheets Financial Automation System 🚀</strong>
-              </span>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+  html += `
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top: 20px; text-align: center; color: #666; font-size: 12px;">
+      <p style="margin-top: 10px;"><i>Dispatched automatically by your <strong>Google Sheets Financial Automation System 🚀</strong></i></p>
+    </div>
+  </div>`;
 
   MailApp.sendEmail({
     to: userEmail,
     subject: `📊 Weekly Financial Summary: ${month} ${year} Briefing`,
-    htmlBody: htmlBody
+    htmlBody: html
   });
-
-  Logger.log("Weekly budget summary email successfully dispatched.");
 }
-
-// ===========================================================================
-// 8. DOUBLE-ENTRY MONTHLY SAVINGS SWEEP SYSTEM
-// ===========================================================================
 
 function promptSavingsSweep() {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dash = ss.getSheetByName("The Monthly Dashboard Tab");
   if (!dash) {
-    ui.alert("Configuration Error ⚠️", "Dashboard sheet not found.", ui.ButtonSet.OK);
+    ui.alert("Error ❌", "Dashboard sheet not found.", ui.ButtonSet.OK);
     return;
   }
   
-  const year = dash.getRange("C4").getValue().toString().trim();
   const month = dash.getRange("D4").getValue().toString().trim();
+  const year = dash.getRange("C4").getValue().toString().trim();
   
   if (month === "All") {
-    ui.alert("Invalid Selection ⚠️", "Please select a specific calendar month (not 'All') on your Dashboard before executing the savings sweep.", ui.ButtonSet.OK);
+    ui.alert("Invalid Selection ⚠️", "Please select a specific month before executing the savings sweep.", ui.ButtonSet.OK);
     return;
   }
   
   const netSavings = parseFloat(dash.getRange("C7").getValue() || 0);
   if (netSavings <= 0) {
-    ui.alert(
-      "No Sweepable Surplus ℹ️",
-      "Your Net Savings for " + month + " " + year + " is " + formatCurrency(netSavings) + ".\n" +
-      "A sweep requires a positive surplus magnitude.",
-      ui.ButtonSet.OK
-    );
+    ui.alert("Zero Surplus ⚠️", `Monthly Net Savings for ${month} ${year} is $${netSavings.toFixed(2)}. Sweep requires a positive surplus.`, ui.ButtonSet.OK);
     return;
   }
   
-  const confirmMsg = "Do you want to execute your Monthly Savings Sweep for " + month + " " + year + "?\n\n" +
-                     "Computed Surplus: " + formatCurrency(netSavings) + "\n\n" +
-                     "This will close out the month and sweep your savings velocity across your goals based on your active allocations.";
+  const response = ui.alert(
+    "Execute Monthly Savings Sweep? 💰",
+    `Monthly Net Surplus for ${month} ${year} is $${netSavings.toFixed(2)}.
+
+Execute relational double-entry sweep to allocated Savings Goals?`,
+    ui.ButtonSet.YES_NO
+  );
   
-  const response = ui.alert("Execute Savings Sweep? 💰", confirmMsg, ui.ButtonSet.YES_NO);
   if (response === ui.Button.YES) {
     try {
-      const summaryResult = executeSavingsSweep(ss, year, month, netSavings);
-      ui.alert("Sweep Executed Successfully! 🎉", summaryResult, ui.ButtonSet.OK);
+      const summary = executeSavingsSweep(ss, year, month, netSavings);
+      ui.alert("Sweep Complete! 🎉", summary, ui.ButtonSet.OK);
     } catch (err) {
-      ui.alert("Sweep Refused ❌", err.toString(), ui.ButtonSet.OK);
+      ui.alert("Sweep Failed ❌", err.toString(), ui.ButtonSet.OK);
     }
   }
 }
 
-/**
- * Runs a transactional double-entry ledger allocation sweep of net income into Savings_Goals.
- */
 function executeSavingsSweep(ss, year, month, netSavings) {
   const goalsSheet = ss.getSheetByName("Savings_Goals");
   const dbSheet = ss.getSheetByName("Transactions_DB");
@@ -1679,105 +1691,88 @@ function executeSavingsSweep(ss, year, month, netSavings) {
   const sweepKey = "sweep_run_" + year + "_" + month;
   const alreadyRun = scriptProperties.getProperty(sweepKey);
   
-  if (alreadyRun === "true") {
-    const forceConfirm = SpreadsheetApp.getUi().alert(
-      "Duplicate Action Triggered ⚠️",
-      "A savings sweep has already been logged for " + month + " " + year + ".\n\n" +
-      "Rerunning the sweep will double-allocate and could distort balances.\n\n" +
-      "Do you want to override and execute anyway?",
-      SpreadsheetApp.getUi().ButtonSet.YES_NO
+  if (alreadyRun) {
+    const ui = SpreadsheetApp.getUi();
+    const confirmReRun = ui.alert(
+      "Sweep Previously Executed ⚠️",
+      `A savings sweep for ${month} ${year} was already run previously.
+Do you want to re-run it?`,
+      ui.ButtonSet.YES_NO
     );
-    if (forceConfirm !== SpreadsheetApp.getUi().Button.YES) {
-      throw new Error("Action cancelled by user to protect database integrity.");
+    if (confirmReRun !== ui.Button.YES) {
+      return "Sweep cancelled by user.";
     }
   }
   
-  // Read allocation profiles from Savings_Goals sheet
-  const goalsLastRow = goalsSheet.getLastRow();
-  let data = [];
-  if (goalsLastRow >= 3) {
-    data = goalsSheet.getRange(3, 1, goalsLastRow - 2, 5).getValues();
-  }
+  const lastGoalRow = goalsSheet.getLastRow();
+  if (lastGoalRow < 3) throw new Error("No goals found on Savings_Goals tab.");
   
-  if (data.length === 0) {
-    throw new Error("No goals found on 'Savings_Goals' tab.");
-  }
-  
-  // Verify allocation percentages total 100%
+  const data = goalsSheet.getRange(3, 1, lastGoalRow - 2, 5).getValues();
   let totalPercentage = 0;
   for (let i = 0; i < data.length; i++) {
     totalPercentage += parseFloat(data[i][4]) || 0;
   }
   
-  if (Math.abs(totalPercentage - 1.0) > 0.001) {
-    throw new Error("Total sweep allocation percentages must equal exactly 100% (" + (totalPercentage * 100).toFixed(0) + "% computed). Please correct your allocations.");
+  if (totalPercentage > 1.001) {
+    throw new Error("Total sweep allocation percentages exceed 100%. Please correct allocations on Savings_Goals tab.");
   }
   
-  // Resolve month indices for chronological timestamping
-  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const monthIdx = monthNames.indexOf(month);
-  const sweepDate = new Date(parseInt(year, 10), monthIdx + 1, 0); // Last day of that billing month
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthIdx = months.indexOf(month);
+  const sweepDate = new Date(parseInt(year, 10), monthIdx + 1, 0);
   
-  let logSummary = "Allocated " + formatCurrency(netSavings) + " as follows:";
-  let entriesLogged = 0;
+  let logSummary = `Successfully swept $${netSavings.toFixed(2)} surplus for ${month} ${year}:`;
+  let entriesAdded = 0;
   
   for (let i = 0; i < data.length; i++) {
     const goalName = data[i][0];
-    const currentBal = parseFloat(data[i][2]) || 0;
     const sweepPct = parseFloat(data[i][4]) || 0;
     
     if (sweepPct <= 0) continue;
     
     const allocationAmount = netSavings * sweepPct;
+    const currentBal = parseFloat(data[i][2]) || 0;
+    goalsSheet.getRange(3 + i, 3).setValue(currentBal + allocationAmount);
     
-    // Programmatic update of balances in goals tab
-    const rowIdx = 3 + i;
-    goalsSheet.getRange(rowIdx, 3).setValue(currentBal + allocationAmount);
+    const timeId = new Date().getTime() + i;
     
-    // DOUBLE-ENTRY BOOKKEEPING TRANSACTION CORRESPONDENCE
-    const timestamp = new Date();
-    const batchId = "SWEEP-" + year + "-" + month.substring(0,3).toUpperCase() + "-" + timestamp.getTime();
-    
-    // Debit Funding Account (OUTFLOW)
+    // Double-entry 1: Debit Outflow
     dbSheet.appendRow([
-      batchId + "-DEBIT-" + i,
-      timestamp,
+      "SWEEP-OUT-" + year + "-" + month + "-" + i,
+      new Date(),
       sweepDate,
-      "REALLOCATE SURPLUS TO " + goalName.toUpperCase(),
-      "Sweep to " + goalName,
+      "Monthly Savings Sweep: " + goalName,
+      "Savings Sweep (" + goalName + ")",
       allocationAmount,
       "OUTFLOW",
       "Savings",
-      "Chase Checking",
-      "WEB_FORM",
+      "Chase Checking 1234",
+      "SAVINGS_SWEEP",
       "SETTLED"
     ]);
     
-    // Credit Savings Destination (INFLOW)
+    // Double-entry 2: Credit Inflow
     dbSheet.appendRow([
-      batchId + "-CREDIT-" + i,
-      timestamp,
+      "SWEEP-IN-" + year + "-" + month + "-" + i,
+      new Date(),
       sweepDate,
-      "RECEIVE ALLOCATION FOR " + goalName.toUpperCase(),
-      "Sweep to " + goalName,
+      "Goal Allocation: " + goalName,
+      "Goal Deposit (" + goalName + ")",
       allocationAmount,
       "INFLOW",
       "Savings",
       "Savings",
-      "WEB_FORM",
+      "SAVINGS_SWEEP",
       "SETTLED"
     ]);
     
-    logSummary += "\n• " + goalName + ": " + formatCurrency(allocationAmount) + " (" + (sweepPct * 100).toFixed(0) + "%)";
-    entriesLogged += 2;
+    entriesAdded += 2;
+    logSummary += `
+• ${goalName}: $${allocationAmount.toFixed(2)} (${(sweepPct * 100).toFixed(0)}%)`;
   }
   
-  if (entriesLogged > 0) {
-    scriptProperties.setProperty(sweepKey, "true");
-    return logSummary;
-  } else {
-    return "No active allocations were computed. Ensure your goals have non-zero sweep percentages.";
-  }
+  scriptProperties.setProperty(sweepKey, "true");
+  return logSummary;
 }
 
 function formatCurrency(amount) {
@@ -1785,7 +1780,7 @@ function formatCurrency(amount) {
 }
 
 // ===========================================================================
-// 9. HIGH-PERFORMANCE DYNAMIC TRANSACTION EDITOR SIDEBAR
+// 8. HIGH-PERFORMANCE DYNAMIC TRANSACTION EDITOR SIDEBAR
 // ===========================================================================
 
 function showTransactionEditorSidebar() {
@@ -1796,10 +1791,6 @@ function showTransactionEditorSidebar() {
   SpreadsheetApp.getUi().showSidebar(htmlOutput);
 }
 
-/**
- * Sidebar Endpoint: Returns a subset of transactions from Transactions_DB to feed the pagination table.
- * Includes optional fuzzy search queries.
- */
 function getTransactionsPage(pageNum, pageSize, searchQuery) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
@@ -1811,7 +1802,6 @@ function getTransactionsPage(pageNum, pageSize, searchQuery) {
   const rawValues = dbSheet.getRange(2, 1, lastRow - 1, 11).getValues();
   const query = (searchQuery || "").toLowerCase().trim();
   
-  // Sort chronologically descending, with transaction row indexing preserved
   const mapped = rawValues.map((row, index) => {
     return {
       rowIdx: index + 2,
@@ -1823,36 +1813,37 @@ function getTransactionsPage(pageNum, pageSize, searchQuery) {
       amount: parseFloat(row[5]) || 0,
       flow: row[6],
       category: row[7],
-      source: row[8],
+      accountSource: row[8],
       channel: row[9],
       status: row[10]
     };
-  }).reverse(); // Most recent first
+  }).reverse();
   
-  const filtered = mapped.filter(tx => {
-    if (query === "") return true;
-    return (tx.merchantRaw || "").toLowerCase().indexOf(query) !== -1 ||
-           (tx.merchantClean || "").toLowerCase().indexOf(query) !== -1 ||
-           (tx.category || "").toLowerCase().indexOf(query) !== -1 ||
-           (tx.source || "").toLowerCase().indexOf(query) !== -1;
+  const filtered = mapped.filter(item => {
+    if (!query) return true;
+    return (
+      item.merchantRaw.toString().toLowerCase().includes(query) ||
+      item.merchantClean.toString().toLowerCase().includes(query) ||
+      item.category.toString().toLowerCase().includes(query) ||
+      item.accountSource.toString().toLowerCase().includes(query) ||
+      item.txId.toString().toLowerCase().includes(query)
+    );
   });
   
-  const totalItems = filtered.length;
-  const totalPages = Math.ceil(totalItems / pageSize);
-  
-  const startIdx = (pageNum - 1) * pageSize;
-  const pageData = filtered.slice(startIdx, startIdx + pageSize);
+  const size = pageSize || 10;
+  const page = pageNum || 1;
+  const totalPages = Math.ceil(filtered.length / size) || 1;
+  const startIndex = (page - 1) * size;
+  const pageData = filtered.slice(startIndex, startIndex + size);
   
   return {
     data: pageData,
     totalPages: totalPages,
-    totalItems: totalItems
+    currentPage: page,
+    totalRecords: filtered.length
   };
 }
 
-/**
- * Sidebar Endpoint: Safely fetches category settings to build select controls.
- */
 function getEnumValues() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const enumSheet = ss.getSheetByName("Enum");
@@ -1861,104 +1852,81 @@ function getEnumValues() {
   const lastRow = enumSheet.getLastRow();
   if (lastRow < 3) return { categories: [], accounts: [] };
   
-  const cats = enumSheet.getRange(3, 1, lastRow - 2, 1).getValues().flat().filter(String);
-  const accs = enumSheet.getRange(3, 2, enumSheet.getRange("B3:B").getLastRow() - 2, 1).getValues().flat().filter(String);
+  const categories = enumSheet.getRange(3, 1, lastRow - 2, 1).getValues().flat().filter(String);
+  const accounts = enumSheet.getRange(3, 2, lastRow - 2, 1).getValues().flat().filter(String);
   
   return {
-    categories: cats,
-    accounts: accs
+    categories: categories,
+    accounts: accounts
   };
 }
 
-/**
- * Sidebar Endpoint: Commits transaction creations or edits back to the sheet cleanly.
- */
-function addOrUpdateTransaction(rowIdx, txData) {
+function addOrUpdateTransaction(txData) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
-  if (!dbSheet) return "ERROR: Transactions_DB tab missing.";
+  if (!dbSheet) throw new Error("Transactions_DB sheet not found.");
   
   const lock = LockService.getScriptLock();
   lock.tryLock(5000);
   
   try {
-    const txDate = new Date(txData.date);
-    const amount = Math.abs(parseFloat(txData.amount)) || 0.00;
-    const flow = txData.flow;
-    const category = txData.category;
-    const source = txData.source;
-    const merchantRaw = txData.merchantRaw;
-    const cleanMerchant = autoCleanMerchantName(merchantRaw);
-    const channel = txData.channel || "SIDEBAR_EDITOR";
-    const status = txData.status || "SETTLED";
+    const rawMerchant = txData.merchantRaw || "Manual Entry";
+    const cleanMerchant = txData.merchantClean || autoCleanMerchantName(rawMerchant);
+    const category = txData.category ? ensureCategoryInEnum(txData.category) : autoCategorizeMerchant(cleanMerchant);
+    const accountSource = ensureAccountInEnum(txData.accountSource || "Cash");
+    const dateVal = txData.date ? new Date(txData.date) : new Date();
+    const amountVal = Math.abs(parseFloat(txData.amount) || 0);
+    const flowVal = txData.flow || "OUTFLOW";
+    const channelVal = txData.channel || "MANUAL";
+    const statusVal = txData.status || "SETTLED";
     
-    if (rowIdx && parseInt(rowIdx, 10) > 1) {
-      // IDEMPOTENT Edit existing row
-      const targetRow = parseInt(rowIdx, 10);
-      const txId = dbSheet.getRange(targetRow, 1).getValue() || ("MANUAL-EDIT-" + new Date().getTime());
-      
-      dbSheet.getRange(targetRow, 1, 1, 11).setValues([[
-        txId,
-        new Date(), // Update timestamp of edit
-        txDate,
-        merchantRaw,
-        cleanMerchant,
-        amount,
-        flow,
-        category,
-        source,
-        channel,
-        status
-      ]]);
-      console.log(`[Transaction Editor Sidebar] Successfully updated transaction at Row ${targetRow}.`);
-      return "SUCCESS: Transaction updated.";
+    if (txData.rowIdx && parseInt(txData.rowIdx, 10) >= 2) {
+      const rowIdx = parseInt(txData.rowIdx, 10);
+      dbSheet.getRange(rowIdx, 3).setValue(dateVal);
+      dbSheet.getRange(rowIdx, 4).setValue(rawMerchant);
+      dbSheet.getRange(rowIdx, 5).setValue(cleanMerchant);
+      dbSheet.getRange(rowIdx, 6).setValue(amountVal);
+      dbSheet.getRange(rowIdx, 7).setValue(flowVal);
+      dbSheet.getRange(rowIdx, 8).setValue(category);
+      dbSheet.getRange(rowIdx, 9).setValue(accountSource);
+      dbSheet.getRange(rowIdx, 10).setValue(channelVal);
+      dbSheet.getRange(rowIdx, 11).setValue(statusVal);
+      return "UPDATED";
     } else {
-      // Append a fresh transaction row
       const txId = "MANUAL-" + new Date().getTime();
       dbSheet.appendRow([
         txId,
         new Date(),
-        txDate,
-        merchantRaw,
+        dateVal,
+        rawMerchant,
         cleanMerchant,
-        amount,
-        flow,
+        amountVal,
+        flowVal,
         category,
-        source,
-        channel,
-        status
+        accountSource,
+        channelVal,
+        statusVal
       ]);
-      console.log("[Transaction Editor Sidebar] Successfully appended new manual transaction.");
-      return "SUCCESS: Transaction added.";
+      return "CREATED";
     }
-  } catch (err) {
-    return "ERROR: " + err.toString();
   } finally {
     lock.releaseLock();
   }
 }
 
-/**
- * Sidebar Endpoint: Deletes a transaction row safely.
- */
 function deleteTransactionRow(rowIdx) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dbSheet = ss.getSheetByName("Transactions_DB");
-  if (!dbSheet) return "ERROR: Transactions_DB tab missing.";
+  if (!dbSheet) throw new Error("Transactions_DB sheet not found.");
+  
+  const row = parseInt(rowIdx, 10);
+  if (isNaN(row) || row < 2) throw new Error("Invalid row index for deletion.");
   
   const lock = LockService.getScriptLock();
   lock.tryLock(5000);
-  
   try {
-    const targetRow = parseInt(rowIdx, 10);
-    if (targetRow > 1) {
-      dbSheet.deleteRow(targetRow);
-      console.log(`[Transaction Editor Sidebar] Successfully deleted transaction at Row ${targetRow}.`);
-      return "SUCCESS";
-    }
-    return "ERROR: Invalid row selected.";
-  } catch (err) {
-    return "ERROR: " + err.toString();
+    dbSheet.deleteRow(row);
+    return "DELETED";
   } finally {
     lock.releaseLock();
   }
