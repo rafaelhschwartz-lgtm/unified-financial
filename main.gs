@@ -1,3 +1,4 @@
+/**v6.2
 /**
  *  ===========================================================================
  *  GOOGLE SHEETS FINANCIAL AUTOMATION SYSTEM (UNIFIED MASTER ENGINE - V5)
@@ -29,6 +30,8 @@ function onOpen() {
     .addItem("Open Budget History Sidebar", "showBudgetSidebar")
     .addItem("Check Budget Breaches", "checkBudgetBreaches")
     .addItem("Dispatch Weekly Summary Email", "sendWeeklyBudgetSummary")
+    .addSeparator()
+    .addItem("Import Single CSV File", "promptForChaseCSV")
     .addToUi();
 }
 
