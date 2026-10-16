@@ -1,176 +1,103 @@
-# Unified Financial Automation Setup Guide - V8 (Master Edition)
+# Unified Financial Automation Setup Guide - V11 (Master Enterprise Edition) (Master Edition)
 
-This comprehensive guide serves as the ultimate developer and operations manual for configuring, running, and expanding your **Enterprise-Grade, Relational Personal Finance Ledger System**. This workbook is engineered to comply with the **FAST Modeling Standard** (Flexibility, Appropriated, Structured, Transparency) and the **ICAEW Spreadsheet Design Principles**.
-
----
-
-## 1. Resolving All Operational Friction Points (Your Complete To-Do List)
-
-We have officially closed out every single feature challenge and technical constraint identified in your tracking ledger:
-
-### A. Dynamic Multi-Account Automatic Detection (Item 1)
-*   **The Ingestion Rule:** When batch CSV imports run, the engine automatically inspects the filename of each statement file uploaded inside `Chase_CSV_Uploads`.
-*   **The Mappings:** If the file name contains keywords like `sapphire`, `credit`, or `cc`, the script automatically labels the transaction's account source in Column I as `Chase Sapphire`. If it contains `checking` or `debit`, it maps it to `Chase Checking`.
-
-### B. No-Code Rules Engine (`Category_Rules_DB`) & Clean Names (Items 2 & 8)
-*   **The Architecture:** Instead of hardcoding categories and merchant aliases in Apps Script, you can edit your rules dynamically in a dedicated sheet tab named **`Category_Rules_DB`**.
-*   **Real-Time Processing:** Whenever transactions run through imports, alerts, or manual logs, the system scans this rules database in real-time. It runs a fuzzy, case-insensitive check to clean the merchant name (e.g., *STARBUCKS STORE 1234* $
-ightarrow$ *Starbucks*) in Column E and assign the target category (e.g., *Food & Drink*) in Column H.
-
-### C. Deterministic Deduplication Signature (Item 3)
-*   Our ingesters utilize a mathematically deterministic hash based on transaction date, raw merchant description, and amount. Uploading duplicate statements will simply skip already written rows—**actual expense metrics are guaranteed never to double!**
-
-### D. Eliminating Transaction Distortion: 'TRANSFER' Flow (Item 4)
-*   **The Challenge:** Moving money between internal accounts (such as a Chase Checking to Savings transfer) historically registered as both income (inflow) and expense (outflow), heavily distorting KPI calculations.
-*   **The Solution:** We introduced a third capital flow classification: **`TRANSFER`**. Any transaction identified as a transfer is cleanly logged in your master ledger database under the `Transfer` category, but **completely ignored by your dashboard KPI cards and budget sparkline models**. This preserves absolute mathematical precision!
-
-### E. Time-Driven Background Trigger Safeguards (Item 5)
-*   To prevent Google’s execution runtime from timing out, all UI alerts are wrapped in safe `try...catch` blocks. Time-driven automation runs seamlessly on Google’s headless cloud servers without hitting blocking alert errors.
-
-### F. Google Voice SMS Alert Scraper (Item 6)
-*   Google Voice automatically forwards incoming transaction SMS text messages (like Venmo pay notifications or CashApp deposits) to your Gmail inbox. Our upgraded scraper (`pullGmailTransactionAlerts`) searches for forwarded SMS text messages, extracts dates, amounts, and flow direction (e.g., *You paid John* $
-ightarrow$ Outflow; *John paid you* $
-ightarrow$ Inflow), and appends them to your database in real-time!
-
-### G. Visual 10-Year Growth Projection and Area Chart
-*   The **`Savings_Goals`** tab houses a compound projection matrix (Years 2026 to 2035) linked to an interactive **10-Year Growth Area Chart**. You can change your expected investment return (cell `I2`) or annual savings contributions (cell `I3`) to dynamically recalculate and visualize your growth curve instantly in real-time!
+This comprehensive setup manual guides you through deploying, testing, and expanding your **Enterprise-Grade, Self-Expanding Personal Finance Ledger System**. The architecture complies strictly with the **FAST Modeling Standard** (Flexibility, Appropriateness, Structure, Transparency) and the **ICAEW Spreadsheet Design Principles**.
 
 ---
 
-## 2. Dynamic, Paginated In-Sheet Transaction Editor Sidebar (Item 7)
+## 1. V11 Master Enhancements
 
-Rather than navigating complex, crowded row cells on your raw `Transactions_DB` tab, you can open our **Dynamic Transaction Editor Sidebar** from your custom toolbar menu:
-1.  **Paginated Ledger Grid:** Displays a list of recent transactions (most recent first) from your live database. Pages through records quickly using High-Performance server-side slice filtering.
-2.  **Fuzzy Search:** Filter transactions instantly by typing part of a merchant name, account, or category inside the search box.
-3.  **Create, Edit, and Delete:**
-    *   Clicking a transaction row in the grid automatically loads its values back into the form fields.
-    *   You can modify dates, clean up raw descriptions, and change accounts or categories using select controls populated dynamically from your `Enum` settings.
-    *   Click **Update Transaction** to save edits, or click the **Trash Can icon** to delete a transaction safely.
-    *   Clear the form to add a brand new cash transaction in seconds!
+### A. Auto-Adding Accounts to `Enum` (`ensureAccountInEnum`)
+* **The Capability:** Whenever an account is detected from a CSV filename, CSV row header, Gmail purchase notification, Google Voice SMS forward, or manual entry (e.g. `Chase Checking 5678`, `Amex Gold 4321`), the script checks `Enum!B3:B` (`Account Sources`).
+* **The Auto-Expansion:** If the account is not listed, the script automatically appends it to Column B on the `Enum` tab and updates data validation dropdowns across `Transactions_DB` in real-time. You never have to manually edit dropdown ranges when opening new bank accounts!
+
+### B. Auto-Adding Categories to `Enum` (`ensureCategoryInEnum`)
+* **The Capability:** When a new category is specified or inferred by auto-categorization rules, `ensureCategoryInEnum()` checks `Enum!A3:A` (`Budget Categories`).
+* **The Auto-Expansion:** If missing, it appends the category to `Enum!A:A`, creates a default `$0.00` historical budget entry in `Budget_History_DB`, and refreshes category dropdown validations on `Transactions_DB` and `Category_Rules_DB`.
+
+### C. Auto-Learning Categorization Rules (`Category_Rules_DB`)
+* **The Capability:** When transactions arrive with unlisted merchants (e.g., `TRADER JOE'S #521`), the script extracts keywords (`trader joe`).
+* **The Auto-Expansion:** If no matching rule exists in `Category_Rules_DB`, the engine infers the category (`Groceries`), cleans the title (`Trader Joe's`), and **automatically appends a new rule row `[keyword, Clean Name, Category]` directly into `Category_Rules_DB`**! Future transactions from that merchant will use this rule automatically without any code editing.
+
+### D. Multi-Account Smart Detection Engine
+* **The Capability:** Handles multiple bank accounts of the same type (e.g., two checking accounts or multiple credit cards).
+* **The Detection:** The parser evaluates account numbers or card nicknames from:
+  1. Filenames in `Chase_CSV_Uploads` (e.g., `checking_1234.csv`, `sapphire_9012.csv`).
+  2. CSV statement columns (`Account Number`).
+  3. Email bodies and SMS text snippets (`card ending in 5678`, `acct #9012`).
+  4. Automatically maps the transaction to `Chase Checking 1234`, `Chase Sapphire 9012`, etc., and ensures the account exists in `Enum`.
+
+### E. "➕ Quick Add Tools" Toolbar Menu
+* **The Capability:** Added a dedicated sub-menu under **`Financial Automation 🚀` > `➕ Quick Add Tools`**:
+  * **`➕ Quick Add Transaction`**: Modal prompt to log a date, merchant, amount, category, and account in seconds.
+  * **`➕ Add New Budget Category`**: Prompts for a category and registers it in `Enum`.
+  * **`➕ Add New Account Source`**: Prompts for an account name and registers it in `Enum`.
+  * **`➕ Add Merchant Category Rule`**: Prompts for keyword, clean name, and target category to populate `Category_Rules_DB`.
 
 ---
 
-## 3. Background Trigger Configurations
+## 2. Step-by-Step Deployment Instructions
 
-To make your entire personal finance stack run completely hands-off, configure these time-driven background triggers inside Google Apps Script:
+### Step 1: Overwrite Master Script Code
+1. Open your Google Sheet and navigate to **Extensions > Apps Script**.
+2. Delete any legacy `.gs` files (like `Setup.gs` or old `main.gs` blocks) to prevent trigger collisions.
+3. Open your primary script file (`main.gs`), delete its contents, and paste the complete code from **`unified-financial-automation-v10.gs`**.
+4. Click the **Save (floppy disk icon)**.
 
-1.  **Hourly Gmail Scraper (`pullGmailTransactionAlerts`):** Scrapes bank transaction alerts and Google Voice SMS alerts forwarded to your inbox, parses values, auto-categorizes, and normalizes signs.
-    *   *Configuration:* Function: `pullGmailTransactionAlerts` | Source: `Time-driven` | Type: `Hour timer` | Interval: `Every hour`.
-2.  **Daily Budget Breach Monitor (`checkBudgetBreaches`):** Automatically scans actual category spending against planned monthly boundaries. Sends an email notification immediately when a breach is detected, utilizing Google's background `PropertiesService` state storage to ensure you are **only notified once per category per month**.
-    *   *Configuration:* Function: `checkBudgetBreaches` | Source: `Time-driven` | Type: `Day timer` | Time: `8 AM to 9 AM`.
-3.  **Weekly HTML Budget Summaries (`sendWeeklyBudgetSummary`):** Compiles your high-level income/expense KPIs and spends pacing velocity relative to the calendar, sending a styled HTML newsletter directly to your inbox every Monday morning.
-    *   *Configuration:* Function: `sendWeeklyBudgetSummary` | Source: `Time-driven` | Type: `Weekly timer` | Day: `Every Monday` | Time: `7 AM to 8 AM`.
+### Step 2: Deploy HTML Sidebar Files
+1. In the Apps Script left-hand sidebar, click **`+` > HTML**. Name the file exactly **`SidebarView`** (omit `.html`). Paste the code from Section 4 below and save.
+2. Click **`+` > HTML**. Name the file exactly **`TransactionEditorView`** (omit `.html`). Paste the code from Section 5 below and save.
+
+### Step 3: Initialize Workbook Tabs In-Place
+1. Return to your Google Sheet browser tab and refresh the page.
+2. Select **`Financial Automation 🚀` > `Initialize Sheets in This Workbook`**.
+3. Confirm the prompt and grant authorization. All operational sheets (**`About`**, **`Enum`**, **`Transactions_DB`**, **`Budget_History_DB`**, **`The Monthly Dashboard Tab`**, **`Control`**, **`Category_Rules_DB`**, **`Savings_Goals`**) will build in-place with pre-linked formulas and dynamic charts!
 
 ---
 
-## 4. Deploying the Sidebar Views
+## 3. Scheduled Background Automation Triggers
 
-To activate both sidebar panels, create two distinct HTML files inside your Google Apps Script editor (**Extensions > Apps Script**):
+To run your ledger 100% hands-off, set up these three time-driven triggers in Apps Script (**Triggers / Alarm Clock icon**):
 
-### A. SidebarView.html (Budget Allocator Sidebar)
-Click **`+` > HTML**, name the file exactly **`SidebarView`** (omit the `.html` extension as Apps Script appends it), and paste the code from Section 5 of your V5 setup guide.
+1. **`pullGmailTransactionAlerts`**:
+   * Event source: `Time-driven` | Type: `Hour timer` | Interval: `Every hour`.
+   * Automatically parses Chase purchase emails and Google Voice transaction text messages, auto-detects account digits, learns new rules, and logs deduplicated entries.
+2. **`checkBudgetBreaches`**:
+   * Event source: `Time-driven` | Type: `Day timer` | Time: `8 AM to 9 AM`.
+   * Evaluates actual category spending against planned monthly boundaries. Sends an email alert if a breach occurs (with state-tracking to limit to 1 alert per category per month).
+3. **`sendWeeklyBudgetSummary`**:
+   * Event source: `Time-driven` | Type: `Weekly timer` | Day: `Every Monday 7 AM to 8 AM`.
+   * Dispatches a mobile-responsive HTML briefing newsletter summarizing month-to-date KPIs, spending velocity, and category statuses.
 
-### B. TransactionEditorView.html (Ledger Editor Sidebar)
-Click **`+` > HTML**, name the file exactly **`TransactionEditorView`**, and paste this modern, fully functional Materialize CSS client-side editor interface:
+---
+
+## 4. SidebarView.html (Historical Budget Allocator)
 
 ```html
 <!DOCTYPE html>
 <html>
   <head>
     <base target="_top">
-    <!-- Load Materialize CSS & Fonts -->
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
     <style>
-      body { padding: 12px; font-family: 'Arial', sans-serif; background-color: #fafafa; font-size: 0.9rem; }
-      .header-title { font-weight: bold; color: #1f4e78; margin-bottom: 12px; font-size: 1.15rem; display: flex; align-items: center; }
-      .header-title i { margin-right: 6px; }
-      .editor-card { background: white; padding: 12px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 12px; }
-      .form-section-title { font-weight: bold; color: #1f4e78; font-size: 0.9rem; border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; margin-bottom: 8px; }
-      .input-field { margin: 6px 0 !important; }
-      .input-field input, .input-field select { height: 2.2rem !important; margin-bottom: 4px !important; }
-      .btn-row { display: flex; gap: 8px; margin-top: 8px; }
-      .btn-row button { flex: 1; height: 32px !important; line-height: 32px !important; font-size: 0.8rem !important; padding: 0 4px !important; text-align: center; }
-      .save-btn { background-color: #1f4e78 !important; }
-      .clear-btn { background-color: #757575 !important; }
-      .delete-btn { background-color: #d32f2f !important; }
-      .search-box { margin-bottom: 8px !important; }
-      .search-box input { height: 2.2rem !important; }
-      .ledger-table { font-size: 0.75rem; background: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow: hidden; margin-top: 8px; }
-      .ledger-table th { padding: 6px 8px; background: #e8eff7; color: #1f4e78; font-weight: bold; }
-      .ledger-table td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
-      .ledger-table tr:hover { background-color: #f5f5f5; }
-      .pagination-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.75rem; color: #666; }
-      .pagination-row button { background: none; border: none; color: #1f4e78; cursor: pointer; font-weight: bold; padding: 4px; }
-      .pagination-row button[disabled] { color: #ccc; cursor: default; }
-      .loader { text-align: center; margin: 15px 0; }
+      body { padding: 15px; font-family: 'Arial', sans-serif; background-color: #fafafa; }
+      .header-title { font-weight: bold; color: #1f4e78; margin-bottom: 20px; font-size: 1.2rem; display: flex; align-items: center; }
+      .header-title i { margin-right: 8px; }
+      .category-row { margin-bottom: 12px; background: white; padding: 10px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+      .category-label { font-weight: bold; color: #333; font-size: 0.95rem; }
+      .save-btn { width: 100%; background-color: #1f4e78 !important; margin-top: 15px; }
+      .loader { margin: 20px auto; text-align: center; }
+      .period-indicator { background: #e8eff7; padding: 8px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9rem; color: #1f4e78; font-weight: bold; text-align: center; }
     </style>
   </head>
   <body>
     <div class="header-title">
-      <i class="material-icons">receipt</i>
-      <span>Transaction Ledger Editor</span>
+      <i class="material-icons">account_balance_wallet</i>
+      <span>Budget Ceilings</span>
     </div>
     
-    <!-- TRANSACTION INPUT / EDIT FORM -->
-    <div class="editor-card">
-      <div class="form-section-title" id="formTitle">Add New Transaction</div>
-      <form id="txForm">
-        <input type="hidden" id="rowIdx" value="">
-        
-        <div class="input-field">
-          <input type="date" id="date" required class="validate">
-        </div>
-        <div class="input-field">
-          <input type="text" id="merchantRaw" placeholder="Merchant Name" required class="validate">
-        </div>
-        <div class="input-field">
-          <input type="number" step="0.01" min="0" id="amount" placeholder="Amount ($)" required class="validate">
-        </div>
-        
-        <div class="row" style="margin: 0; display: flex; gap: 6px;">
-          <div class="input-field" style="flex: 1; margin: 4px 0 !important;">
-            <select id="flow" required style="display: block; font-size: 0.8rem; height: 2.2rem; border: 1px solid #ccc; border-radius: 4px;">
-              <option value="OUTFLOW">OUTFLOW</option>
-              <option value="INFLOW">INFLOW</option>
-              <option value="TRANSFER">TRANSFER</option>
-            </select>
-          </div>
-          <div class="input-field" style="flex: 1; margin: 4px 0 !important;">
-            <select id="status" required style="display: block; font-size: 0.8rem; height: 2.2rem; border: 1px solid #ccc; border-radius: 4px;">
-              <option value="SETTLED">SETTLED</option>
-              <option value="PENDING">PENDING</option>
-              <option value="MANUAL_REVIEW">REVIEW</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="input-field">
-          <select id="category" required style="display: block; font-size: 0.8rem; height: 2.2rem; border: 1px solid #ccc; border-radius: 4px;">
-            <option value="" disabled selected>Select Category</option>
-          </select>
-        </div>
-        <div class="input-field">
-          <select id="source" required style="display: block; font-size: 0.8rem; height: 2.2rem; border: 1px solid #ccc; border-radius: 4px;">
-            <option value="" disabled selected>Select Account Source</option>
-          </select>
-        </div>
-        
-        <div class="btn-row">
-          <button class="btn waves-effect waves-light save-btn" type="submit" id="submitBtn">Save</button>
-          <button class="btn waves-effect waves-light clear-btn" type="button" onclick="clearForm()">Clear</button>
-          <button class="btn waves-effect waves-light delete-btn" type="button" id="deleteBtn" style="display:none;" onclick="deleteTransaction()">Delete</button>
-        </div>
-      </form>
-    </div>
-    
-    <!-- DYNAMIC PAGINATED GRID VIEW -->
-    <div class="form-section-title">Database Records</div>
-    <div class="search-box">
-      <input type="text" id="search" placeholder="🔍 Search Merchant or Category..." oninput="triggerSearch()">
-    </div>
-    
-    <div id="loader" class="loader" style="display:none;">
+    <div id="periodIndicator" class="period-indicator">Loading active period...</div>
+    <div id="loading" class="loader">
       <div class="preloader-wrapper small active">
         <div class="spinner-layer spinner-blue-only">
           <div class="circle-clipper left"><div class="circle"></div></div>
@@ -180,161 +107,71 @@ Click **`+` > HTML**, name the file exactly **`TransactionEditorView`**, and pas
       </div>
     </div>
     
-    <div id="tableContainer"></div>
-    
-    <div class="pagination-row">
-      <button id="prevBtn" onclick="changePage(-1)" disabled>◀ Prev</button>
-      <span id="pageIndicator">Page 1 of 1</span>
-      <button id="nextBtn" onclick="changePage(1)" disabled>Next ▶</button>
-    </div>
+    <form id="budgetForm" style="display:none;">
+      <div id="categoryContainer"></div>
+      <button class="btn waves-effect waves-light save-btn" type="submit" name="action">
+        Save Budget Targets
+        <i class="material-icons right">save</i>
+      </button>
+    </form>
 
-    <!-- Scripting Interaction Rules -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
     <script>
-      let currentPage = 1;
-      const pageSize = 5;
-      let totalPages = 1;
-      let currentSearch = "";
-      
+      let activeYear = "";
+      let activeMonth = "";
+
       document.addEventListener('DOMContentLoaded', function() {
-        // Retrieve Category & Account values to build dropdown portals
-        google.script.run.withSuccessHandler(populateDropdowns).getEnumValues();
-        loadTransactions();
+        google.script.run.withSuccessHandler(initializePeriod).getDashboardPeriod();
       });
-      
-      function populateDropdowns(enums) {
-        const catSelect = document.getElementById("category");
-        enums.categories.forEach(cat => {
-          const opt = document.createElement("option");
-          opt.value = cat;
-          opt.text = cat;
-          catSelect.appendChild(opt);
+
+      function initializePeriod(period) {
+        activeYear = period.year;
+        activeMonth = period.month;
+        document.getElementById("periodIndicator").innerText = "Period: " + activeMonth + " " + activeYear;
+        google.script.run.withSuccessHandler(renderCategories).getCategoryBudgets(activeYear, activeMonth);
+      }
+
+      function renderCategories(data) {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("budgetForm").style.display = "block";
+        const container = document.getElementById("categoryContainer");
+        container.innerHTML = "";
+        
+        data.forEach(item => {
+          const div = document.createElement("div");
+          div.className = "category-row";
+          div.innerHTML = `
+            <div class="category-label">${item.category}</div>
+            <div class="input-field inline" style="margin:0; width:100%;">
+              <i class="material-icons prefix" style="font-size:1.3rem; margin-top:8px;">attach_money</i>
+              <input type="number" step="0.01" min="0" class="validate budget-input" data-category="${item.category}" value="${item.amount.toFixed(2)}" style="height:2rem; margin:0;">
+            </div>
+          `;
+          container.appendChild(div);
         });
-        
-        const srcSelect = document.getElementById("source");
-        enums.accounts.forEach(src => {
-          const opt = document.createElement("option");
-          opt.value = src;
-          opt.text = src;
-          srcSelect.appendChild(opt);
-        });
       }
-      
-      function loadTransactions() {
-        document.getElementById("loader").style.display = "block";
-        document.getElementById("tableContainer").innerHTML = "";
-        
-        google.script.run.withSuccessHandler(renderTransactionsTable)
-          .getTransactionsPage(currentPage, pageSize, currentSearch);
-      }
-      
-      function renderTransactionsTable(response) {
-        document.getElementById("loader").style.display = "none";
-        totalPages = response.totalPages || 1;
-        document.getElementById("pageIndicator").innerText = "Page " + currentPage + " of " + totalPages;
-        
-        document.getElementById("prevBtn").disabled = (currentPage === 1);
-        document.getElementById("nextBtn").disabled = (currentPage === totalPages);
-        
-        if (!response.data || response.data.length === 0) {
-          document.getElementById("tableContainer").innerHTML = "<p style='color:#777; text-align:center;'>No matching transactions found.</p>";
-          return;
-        }
-        
-        let html = "<table class='striped ledger-table'><thead><tr><th>Date</th><th>Merchant</th><th style='text-align:right;'>Amount</th></tr></thead><tbody>";
-        
-        response.data.forEach(tx => {
-          const formattedAmount = (tx.flow === "INFLOW" ? "+" : "-") + "$" + tx.amount.toFixed(2);
-          const amtColor = tx.flow === "INFLOW" ? "color:#2e7d32;" : (tx.flow === "TRANSFER" ? "color:#757575;" : "color:#c00000;");
-          
-          html += `<tr onclick='selectTransaction(${JSON.stringify(tx)})'>
-            <td>${tx.date}</td>
-            <td><b>${tx.merchantClean || tx.merchantRaw}</b><br><span style="color:#777; font-size:0.65rem;">${tx.category}</span></td>
-            <td style="text-align:right; font-weight:bold; ${amtColor}">${formattedAmount}</td>
-          </tr>`;
-        });
-        
-        html += "</tbody></table>";
-        document.getElementById("tableContainer").innerHTML = html;
-      }
-      
-      function selectTransaction(tx) {
-        document.getElementById("rowIdx").value = tx.rowIdx;
-        document.getElementById("date").value = tx.date;
-        document.getElementById("merchantRaw").value = tx.merchantRaw;
-        document.getElementById("amount").value = tx.amount;
-        document.getElementById("flow").value = tx.flow;
-        document.getElementById("status").value = tx.status;
-        document.getElementById("category").value = tx.category;
-        document.getElementById("source").value = tx.source;
-        
-        document.getElementById("formTitle").innerText = "Edit Transaction (Row " + tx.rowIdx + ")";
-        document.getElementById("submitBtn").innerText = "Update";
-        document.getElementById("deleteBtn").style.display = "block";
-      }
-      
-      function clearForm() {
-        document.getElementById("txForm").reset();
-        document.getElementById("rowIdx").value = "";
-        document.getElementById("formTitle").innerText = "Add New Transaction";
-        document.getElementById("submitBtn").innerText = "Save";
-        document.getElementById("deleteBtn").style.display = "none";
-      }
-      
-      function triggerSearch() {
-        currentSearch = document.getElementById("search").value;
-        currentPage = 1;
-        loadTransactions();
-      }
-      
-      function changePage(direction) {
-        currentPage += direction;
-        if (currentPage < 1) currentPage = 1;
-        if (currentPage > totalPages) currentPage = totalPages;
-        loadTransactions();
-      }
-      
-      // Submit transaction to spreadsheet
-      document.getElementById("txForm").addEventListener("submit", function(e) {
+
+      document.getElementById("budgetForm").addEventListener("submit", function(e) {
         e.preventDefault();
+        const inputs = document.querySelectorAll(".budget-input");
+        const budgetData = [];
         
-        const rowIdx = document.getElementById("rowIdx").value;
-        const txData = {
-          date: document.getElementById("date").value,
-          merchantRaw: document.getElementById("merchantRaw").value,
-          amount: parseFloat(document.getElementById("amount").value),
-          flow: document.getElementById("flow").value,
-          status: document.getElementById("status").value,
-          category: document.getElementById("category").value,
-          source: document.getElementById("source").value
-        };
+        inputs.forEach(input => {
+          budgetData.push({
+            category: input.getAttribute("data-category"),
+            amount: parseFloat(input.value) || 0
+          });
+        });
         
         M.toast({html: 'Syncing to Database... ⏳', classes: 'blue'});
-        google.script.run.withSuccessHandler(function(response) {
-          if (response.indexOf("SUCCESS") !== -1) {
-            M.toast({html: 'Ledger synchronized successfully! 🎉', classes: 'green'});
-            clearForm();
-            loadTransactions();
-          } else {
-            M.toast({html: 'Sync failed: ' + response, classes: 'red'});
-          }
-        }).addOrUpdateTransaction(rowIdx, txData);
+        google.script.run.withSuccessHandler(onSaveSuccess).saveCategoryBudgets(activeYear, activeMonth, budgetData);
       });
-      
-      function deleteTransaction() {
-        const rowIdx = document.getElementById("rowIdx").value;
-        if (!rowIdx) return;
-        
-        if (confirm("Are you absolutely sure you want to delete this transaction from your master ledger database?")) {
-          M.toast({html: 'Removing Transaction... ⏳', classes: 'blue'});
-          google.script.run.withSuccessHandler(function(response) {
-            if (response === "SUCCESS") {
-              M.toast({html: 'Transaction deleted successfully! 🗑️', classes: 'orange'});
-              clearForm();
-              loadTransactions();
-            } else {
-              M.toast({html: 'Deletion failed: ' + response, classes: 'red'});
-            }
-          }).deleteTransactionRow(rowIdx);
+
+      function onSaveSuccess(response) {
+        if (response === "SUCCESS") {
+          M.toast({html: 'Budgets saved successfully! 🎉', classes: 'green'});
+        } else {
+          M.toast({html: 'Save failed ❌', classes: 'red'});
         }
       }
     </script>
@@ -344,16 +181,374 @@ Click **`+` > HTML**, name the file exactly **`TransactionEditorView`**, and pas
 
 ---
 
-## 5. Ultimate Verification & Operational Walkthrough
+## 5. TransactionEditorView.html (Paginated Transaction Ledger Editor)
 
-Once you deploy these modules, run through these validation checks to confirm your personal ledger is 100% operational:
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 12px; font-family: 'Arial', sans-serif; background-color: #f9fbfd; font-size: 0.9rem; }
+      .header-title { font-weight: bold; color: #1f4e78; margin-bottom: 12px; font-size: 1.1rem; display: flex; align-items: center; justify-content: space-between; }
+      .card-panel { padding: 12px; margin-bottom: 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+      .input-field { margin-top: 5px; margin-bottom: 5px; }
+      .input-field input, .input-field select { height: 2.2rem; font-size: 0.85rem; }
+      .btn-small { background-color: #1f4e78 !important; padding: 0 12px; height: 28px; line-height: 28px; font-size: 0.8rem; }
+      .btn-danger { background-color: #db4437 !important; }
+      .btn-secondary { background-color: #757575 !important; }
+      .tx-item { padding: 8px; border-bottom: 1px solid #e0e0e0; cursor: pointer; transition: background 0.2s; }
+      .tx-item:hover { background-color: #e8eff7; }
+      .tx-merchant { font-weight: bold; color: #333; }
+      .tx-meta { font-size: 0.75rem; color: #666; display: flex; justify-content: space-between; margin-top: 2px; }
+      .tx-amount-out { color: #db4437; font-weight: bold; }
+      .tx-amount-in { color: #2e7d32; font-weight: bold; }
+      .pagination-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 0.8rem; }
+      .loader { text-align: center; margin: 15px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="header-title">
+      <span><i class="material-icons left" style="font-size:1.2rem;">edit_note</i>Ledger Editor</span>
+      <button class="btn-small waves-effect waves-light" onclick="clearForm()">➕ New</button>
+    </div>
 
-1.  **Initialize Tab Structure:** Select **`Financial Automation 🚀` > `Initialize Sheets in This Workbook`** from your spreadsheet's custom menu. Refresh your browser page to reload the toolbar.
-2.  **Add Category Rule:** Navigate to the **`Category_Rules_DB`** tab and type `starbucks` in cell A16, `Starbucks` in cell B16, and select `Food & Drink` from the dropdown validation in cell C16.
-3.  **Launch Transaction Editor:** Select **`Financial Automation 🚀` > `Open Transaction Editor Sidebar`**. Add a transaction with raw description `STARBUCKS #1234 COFFEE` with amount `8.50`. Check your **`Transactions_DB`** tab—the rule automatically cleaned the merchant to `Starbucks` in Column E and categorized it under `Food & Drink` in Column H!
-4.  **Batch Import Chase CSV Statements:**
-    *   Open your Google Drive root and locate the newly generated folder: **`Chase_CSV_Uploads`**.
-    *   Upload standard Chase debit/credit CSV statement files.
-    *   Return to your spreadsheet, and select **`Batch Import CSV Folder`**.
-    *   The engine automatically evaluates filename structures, maps credit cards and checking accounts, deduplicates and normalizes signs, auto-categorizes rows in real-time, and archives processed CSV files inside Drive!
-5.  **Trigger Savings Sweep:** Select **`The Monthly Dashboard Tab`** and change your selection to **`August 2026`**. Under **`Savings_Goals`**, verify your allocation percentages. Select **`Execute Monthly Savings Sweep`** from the custom menu—the script will calculate your monthly surplus, write corresponding debit/credit transfer entries to `Transactions_DB`, and update your savings goal balances and projection curves with gorgeous visual bars!
+    <!-- FORM PANEL -->
+    <div class="card-panel">
+      <input type="hidden" id="txRowIdx" value="">
+      
+      <div class="row" style="margin-bottom:0;">
+        <div class="input-field col s6">
+          <input type="date" id="txDate">
+        </div>
+        <div class="input-field col s6">
+          <input type="number" id="txAmount" step="0.01" placeholder="Amount ($)">
+        </div>
+      </div>
+
+      <div class="input-field" style="margin-top:0;">
+        <input type="text" id="txMerchant" placeholder="Merchant / Payee Name">
+      </div>
+
+      <div class="row" style="margin-bottom:0;">
+        <div class="input-field col s6">
+          <select id="txFlow" class="browser-default">
+            <option value="OUTFLOW">OUTFLOW</option>
+            <option value="INFLOW">INFLOW</option>
+            <option value="TRANSFER">TRANSFER</option>
+          </select>
+        </div>
+        <div class="input-field col s6">
+          <select id="txCategory" class="browser-default">
+            <option value="">Category...</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="input-field" style="margin-top:5px;">
+        <select id="txAccount" class="browser-default">
+          <option value="">Account Source...</option>
+        </select>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; margin-top:10px;">
+        <button class="btn-small waves-effect waves-light" onclick="saveTransaction()">Save</button>
+        <button class="btn-small btn-secondary waves-effect" onclick="clearForm()">Clear</button>
+        <button class="btn-small btn-danger waves-effect" id="btnDelete" style="display:none;" onclick="deleteTransaction()">Delete</button>
+      </div>
+    </div>
+
+    <!-- SEARCH & TRANSACTIONS LIST -->
+    <div class="input-field" style="margin-bottom:8px;">
+      <input type="text" id="searchInput" placeholder="🔍 Search payee, category, account..." onkeyup="debounceSearch()">
+    </div>
+
+    <div id="loader" class="loader" style="display:none;">
+      <div class="preloader-wrapper micro active">
+        <div class="spinner-layer spinner-blue-only">
+          <div class="circle-clipper left"><div class="circle"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="txList"></div>
+
+    <div class="pagination-controls">
+      <button class="btn-small waves-effect btn-secondary" id="btnPrev" onclick="changePage(-1)">Prev</button>
+      <span id="pageInfo">Page 1 of 1</span>
+      <button class="btn-small waves-effect btn-secondary" id="btnNext" onclick="changePage(1)">Next</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    <script>
+      let currentPage = 1;
+      let totalPages = 1;
+      let searchTimeout = null;
+
+      document.addEventListener('DOMContentLoaded', function() {
+        loadEnumDropdowns();
+        loadTransactions(1);
+        document.getElementById("txDate").value = new Date().toISOString().split('T')[0];
+      });
+
+      function loadEnumDropdowns() {
+        google.script.run.withSuccessHandler(function(enums) {
+          const catSelect = document.getElementById("txCategory");
+          const acctSelect = document.getElementById("txAccount");
+          
+          catSelect.innerHTML = '<option value="">Category...</option>';
+          enums.categories.forEach(c => {
+            catSelect.innerHTML += `<option value="${c}">${c}</option>`;
+          });
+          
+          acctSelect.innerHTML = '<option value="">Account Source...</option>';
+          enums.accounts.forEach(a => {
+            acctSelect.innerHTML += `<option value="${a}">${a}</option>`;
+          });
+        }).getEnumValues();
+      }
+
+      function loadTransactions(page) {
+        document.getElementById("loader").style.display = "block";
+        const query = document.getElementById("searchInput").value;
+        google.script.run.withSuccessHandler(renderTransactions).getTransactionsPage(page, 8, query);
+      }
+
+      function renderTransactions(res) {
+        document.getElementById("loader").style.display = "none";
+        currentPage = res.currentPage;
+        totalPages = res.totalPages;
+        document.getElementById("pageInfo").innerText = `Page ${currentPage} of ${totalPages} (${res.totalRecords})`;
+        
+        document.getElementById("btnPrev").disabled = (currentPage <= 1);
+        document.getElementById("btnNext").disabled = (currentPage >= totalPages);
+        
+        const container = document.getElementById("txList");
+        container.innerHTML = "";
+        
+        if (!res.data || res.data.length === 0) {
+          container.innerHTML = '<div style="text-align:center; color:#888; padding:15px;">No transactions found.</div>';
+          return;
+        }
+
+        res.data.forEach(item => {
+          const div = document.createElement("div");
+          div.className = "tx-item";
+          const amountClass = item.flow === "INFLOW" ? "tx-amount-in" : "tx-amount-out";
+          const amountPrefix = item.flow === "INFLOW" ? "+" : "-";
+          
+          div.innerHTML = `
+            <div class="tx-merchant">${item.merchantClean || item.merchantRaw}</div>
+            <div class="tx-meta">
+              <span>${item.date} &bull; ${item.category} (${item.accountSource})</span>
+              <span class="${amountClass}">${amountPrefix}$${item.amount.toFixed(2)}</span>
+            </div>
+          `;
+          
+          div.onclick = function() {
+            populateForm(item);
+          };
+          container.appendChild(div);
+        });
+      }
+
+      function populateForm(item) {
+        document.getElementById("txRowIdx").value = item.rowIdx;
+        document.getElementById("txDate").value = item.date;
+        document.getElementById("txAmount").value = item.amount;
+        document.getElementById("txMerchant").value = item.merchantRaw;
+        document.getElementById("txFlow").value = item.flow;
+        document.getElementById("txCategory").value = item.category;
+        document.getElementById("txAccount").value = item.accountSource;
+        document.getElementById("btnDelete").style.display = "inline-block";
+      }
+
+      function clearForm() {
+        document.getElementById("txRowIdx").value = "";
+        document.getElementById("txDate").value = new Date().toISOString().split('T')[0];
+        document.getElementById("txAmount").value = "";
+        document.getElementById("txMerchant").value = "";
+        document.getElementById("txFlow").value = "OUTFLOW";
+        document.getElementById("txCategory").value = "";
+        document.getElementById("txAccount").value = "";
+        document.getElementById("btnDelete").style.display = "none";
+      }
+
+      function saveTransaction() {
+        const rowIdx = document.getElementById("txRowIdx").value;
+        const txData = {
+          rowIdx: rowIdx,
+          date: document.getElementById("txDate").value,
+          amount: parseFloat(document.getElementById("txAmount").value) || 0,
+          merchantRaw: document.getElementById("txMerchant").value,
+          flow: document.getElementById("txFlow").value,
+          category: document.getElementById("txCategory").value,
+          accountSource: document.getElementById("txAccount").value,
+          channel: "MANUAL",
+          status: "SETTLED"
+        };
+
+        if (!txData.merchantRaw || txData.amount <= 0) {
+          M.toast({html: 'Please enter merchant and amount > 0 ⚠️', classes: 'orange'});
+          return;
+        }
+
+        M.toast({html: 'Saving transaction... ⏳', classes: 'blue'});
+        google.script.run.withSuccessHandler(function(res) {
+          M.toast({html: `Transaction ${res.toLowerCase()}! 🎉`, classes: 'green'});
+          clearForm();
+          loadEnumDropdowns();
+          loadTransactions(currentPage);
+        }).addOrUpdateTransaction(txData);
+      }
+
+      function deleteTransaction() {
+        const rowIdx = document.getElementById("txRowIdx").value;
+        if (!rowIdx) return;
+
+        if (confirm("Are you sure you want to delete this transaction from your sheet?")) {
+          M.toast({html: 'Deleting row... ⏳', classes: 'blue'});
+          google.script.run.withSuccessHandler(function(res) {
+            M.toast({html: 'Transaction deleted! 🗑️', classes: 'green'});
+            clearForm();
+            loadTransactions(currentPage);
+          }).deleteTransactionRow(rowIdx);
+        }
+      }
+
+      function changePage(delta) {
+        const target = currentPage + delta;
+        if (target >= 1 && target <= totalPages) {
+          loadTransactions(target);
+        }
+      }
+
+      function debounceSearch() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(function() {
+          loadTransactions(1);
+        }, 300);
+      }
+    </script>
+  </body>
+</html>
+```
+
+
+## 6. Isolated Trip & Project Expense Tracker Engine (`Trip_Budget`)
+
+To prevent special high-ticket expenses (such as a vacation, wedding, conference, or home remodel) from distorting your regular monthly household spending metrics, V11 includes a dedicated **Trip & Project Expense Tracker Generator**:
+
+### A. How to Create a New Trip/Project Budget
+1. Click **`Financial Automation 🚀` > `➕ Create Trip / Project Budget`** on your toolbar.
+2. Enter the title of your trip or project (e.g., `NYC Trip 2026`, `Israel Vacation`, `Kitchen Remodel`).
+3. Enter your overall target planned budget limit (e.g., `$3,500.00`).
+4. The script will programmatically create a clean, dedicated tab named **`Trip_[Your_Title]`** with:
+   * **KPI Summary Header Cards**: Total Planned Budget, Total Actual Spend, Variance Remaining, and Status (`ON TRACK ✅` / `OVER BUDGET ❌`).
+   * **Category Summary Table**: Automatically computes actual spending across trip categories (`Flights & Airfare`, `Lodging & Hotels`, `Meals & Dining`, `Events & Tickets`, `Sightseeing`, `Ground Transportation`, `Miscellaneous`) using dynamic `=SUMIF()` formulas.
+   * **Itemized Expense Log**: An isolated ledger where you can record dates, descriptions, costs, trip categories (via dropdown), and payment sources.
+
+---
+
+## 6. Categorization Assistant Sidebar (`CategorizerView.html`)
+
+To provide an ultra-convenient visual interface for sorting uncategorized transactions, checks, Zelle payments, and wire transfers, create a third HTML file in Apps Script named **`CategorizerView`** (omit `.html`) and paste this code:
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 12px; font-family: 'Arial', sans-serif; background-color: #f8f9fa; }
+      .header-title { font-weight: bold; color: #1f4e78; margin-bottom: 12px; font-size: 1.1rem; display: flex; align-items: center; justify-content: space-between; }
+      .queue-badge { background-color: #1f4e78; color: white; border-radius: 12px; padding: 2px 10px; font-size: 0.8rem; }
+      .tx-card { background: white; border-radius: 8px; padding: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.08); margin-bottom: 15px; border-left: 5px solid #1f4e78; }
+      .tx-amount { font-size: 1.2rem; font-weight: bold; }
+      .outflow { color: #d32f2f; }
+      .inflow { color: #2e7d32; }
+      .raw-merchant { font-size: 0.85rem; color: #666; word-break: break-word; background: #f1f3f4; padding: 6px; border-radius: 4px; margin: 8px 0; font-family: monospace; }
+      .btn-apply { width: 100%; background-color: #1f4e78 !important; margin-top: 10px; }
+      .btn-skip { width: 100%; background-color: #757575 !important; margin-top: 6px; }
+      .empty-state { text-align: center; padding: 30px 10px; }
+      .empty-state i { font-size: 3.5rem; color: #2e7d32; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="header-title">
+      <span>Categorizer Assistant</span>
+      <span id="queueBadge" class="queue-badge">0 left</span>
+    </div>
+
+    <div id="loader" style="text-align:center; margin-top:30px;">
+      <div class="preloader-wrapper small active"><div class="spinner-layer spinner-blue-only"><div class="circle-clipper left"><div class="circle"></div></div></div></div>
+      <p style="color:#666; font-size:0.85rem;">Scanning uncategorized transactions...</p>
+    </div>
+
+    <div id="emptyState" class="empty-state" style="display:none;">
+      <i class="material-icons">check_circle</i>
+      <h5>All Caught Up!</h5>
+      <p style="color:#666;">Every transaction in your database is cleanly categorized.</p>
+    </div>
+
+    <div id="cardContainer" style="display:none;">
+      <div class="tx-card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span id="txDate" style="color:#666;"></span>
+          <span id="txAmount" class="tx-amount"></span>
+        </div>
+        
+        <div style="margin-top:8px;">
+          <span style="font-size:0.75rem; color:#888; font-weight:bold;">Raw Statement Text:</span>
+          <div id="txRawMerchant" class="raw-merchant"></div>
+        </div>
+
+        <div class="input-field" style="margin-top:10px; margin-bottom:10px;">
+          <input type="text" id="cleanNameInput">
+          <label for="cleanNameInput" class="active">Standardized Clean Name</label>
+        </div>
+
+        <div style="margin-top:10px;">
+          <label style="color:#333; font-weight:bold;">Assign Category:</label>
+          <select id="categorySelect" class="browser-default" style="margin-top:4px; border:1px solid #ccc; border-radius:4px; padding:6px;"></select>
+        </div>
+
+        <div style="margin-top:12px; background:#e8f0fe; padding:8px; border-radius:4px;">
+          <label>
+            <input type="checkbox" id="saveRuleCheck" class="filled-in" checked="checked" />
+            <span style="font-size:0.82rem; color:#1a73e8; font-weight:bold;">Save rule for keyword:</span>
+          </label>
+          <input type="text" id="keywordRuleInput" style="height:1.8rem; margin:4px 0 0 0; background:white; padding:2px 6px; border-radius:3px;">
+        </div>
+
+        <button class="btn waves-effect waves-light btn-apply" onclick="applyCategory()">Categorize & Save Rule</button>
+        <button class="btn waves-effect waves-light btn-skip" onclick="skipTransaction()">Skip For Now</button>
+      </div>
+    </div>
+  </body>
+</html>
+```
+
+---
+
+## 7. How Special Transaction Types are Handled (Checks, Zelle, Wires, ACH)
+
+To resolve non-standard bank transaction strings, the V11 engine applies structured pattern recognition:
+
+1. **Checks (`CHECK #1024` / `CHECK PAID`)**:
+   - Automatically extracts Check Numbers (e.g. `Check #1024`).
+   - Default Category: `Checks & Banking` (or custom rule from `Category_Rules_DB`).
+2. **QuickPay / Zelle (`ZELLE TO JOHN DOE REF 9812`)**:
+   - Extracts Payer / Payee names and cleans them (e.g. `Zelle: John Doe`).
+   - Flow: Correctly assigns `INFLOW` or `OUTFLOW`.
+   - Default Category: `Personal` or `Transfer` (or custom auto-learned rule).
+3. **Wire Transfers (`WIRE TRANS OUT REF# 8812`)**:
+   - Cleans to `Wire Transfer (8812)`.
+   - Flow: Assigns `TRANSFER` or `OUTFLOW`.
+4. **ACH / Direct Deposit (`ACH CREDIT PAYROLL`)**:
+   - Cleans to `Direct Deposit / ACH`.
+   - Category: Automatically maps to `Income` for inflow credits.
